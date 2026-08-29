@@ -1,0 +1,27 @@
+__pycache__
+*.py[cod]
+
+# macOS
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+.jupyter/desktop-workspaces
+
+# vs code
+.vscode
+
+# Packaging
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Environments
+.venv/
+venv/
+.env
+
+.claude/
+notebooks/
+notebook/
