@@ -25,3 +25,10 @@ venv/
 .claude/
 notebooks/
 notebook/
+
+# Cached third-party pages and data extracted from them.
+# Artemis.bm forbids reproduction/publication without a licence and this repo
+# is PUBLIC, so the scrape and its derived tables stay local. The code that
+# produces them is tracked; the content is not. Re-fetch with src/fetch.py.
+raw/
+data/*.csv
