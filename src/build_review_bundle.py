@@ -15,7 +15,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
-from fetch import fetch                                        # noqa: E402
+from fetch import fetch, _cache_path                           # noqa: E402
 from parse_deal import (parse_deal, parse_tranches, check_tranche_sum,  # noqa: E402
                         TIER1_KEYS, FIELD_TIER)
 
@@ -24,14 +24,14 @@ TRANCHE_ONLY = {"expected_loss", "attachment_probability", "exhaustion_probabili
 
 
 def cached_urls():
-    names = {p.name for p in (ROOT / "raw").glob("*.html")}
+    """Queue rows whose page is already cached, in crawl order.
+
+    Asks fetch() for the cache path rather than recomputing the hash: this
+    duplicated the key derivation, so normalising the URL in fetch() silently
+    made every lookup miss and the builder emitted zero rows.
+    """
     q = pd.read_csv(ROOT / "data" / "queue.csv", keep_default_na=False, dtype=str)
-    out = []
-    for _, r in q.iterrows():                      # queue order: ancestors first
-        h = hashlib.sha256(r.deal_url.encode()).hexdigest()[:10]
-        if any(h in n for n in names):
-            out.append(r)
-    return out
+    return [r for _, r in q.iterrows() if _cache_path(r.deal_url).exists()]
 
 
 def main():

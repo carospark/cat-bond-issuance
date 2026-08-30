@@ -147,11 +147,8 @@ if __name__ == "__main__":
     q = pd.read_csv(ROOT / "data" / "queue.csv", keep_default_na=False, dtype=str)
     cached = {p.name for p in (ROOT / "raw").glob("*.html")}
 
-    def is_cached(url):
-        import hashlib
-        return any(hashlib.sha256(url.encode()).hexdigest()[:10] in n for n in cached)
-
-    todo = [r for _, r in q.iterrows() if is_cached(r.deal_url)]
+    from fetch import _cache_path
+    todo = [r for _, r in q.iterrows() if _cache_path(r.deal_url).exists()]
     print("auditing %d cached deals, oldest-first within family\n" % len(todo))
     all_f = []
     for r in todo:                     # queue order = ancestors first
