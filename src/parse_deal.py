@@ -128,6 +128,21 @@ SIZING_CTX_RE = re.compile(
     r"tranche|offering|issuance|target|seeking|notes|size|sponsorship|"
     r"protection|upsiz|secured|priced|cat bond|deal", re.IGNORECASE)
 
+# A deal-level size state must not be a component's size. Two discriminators,
+# both learned from real pages:
+#   class-scoped   "$100 million class A variable-rate notes" (Atlantic) and
+#                  "The Class D tranche ... grew to $300 million" (Kilimanjaro)
+#                  are tranche facts; taking them as the deal state produced a
+#                  +200% phantom launch and hid Kilimanjaro's real $625m update.
+#   enumerated     "Two tranches, one of $25m and one of $20m" (Mosaic) lists
+#                  components with no total; the first is not the deal size.
+# Note the word "tranche" alone is NOT a discriminator: Kilimanjaro's genuine
+# launch reads "comes out of the blocks at $300m in size, split into two
+# tranches", which is deal-scoped despite naming them.
+CLASS_SCOPED_RE = re.compile(r"\bClass\s+[A-Z0-9]", re.IGNORECASE)
+AGGREGATE_RE = re.compile(r"\btotal|combined|aggregate|altogether|in all\b",
+                          re.IGNORECASE)
+
 # Source placeholders. Artemis writes these where it has no data; they are
 # nulls wearing a value's clothes and previously sat in the table at HIGH
 # confidence, making "the source is silent" indistinguishable from "our parser
@@ -384,6 +399,12 @@ def parse_deal(html, deal_url=None):
                 continue  # figure belongs to a predecessor deal
             if not SIZING_CTX_RE.search(sentence):
                 continue  # money here is not a deal size
+            if CLASS_SCOPED_RE.search(sentence):
+                continue  # a tranche's size, not the deal's
+            amounts = [x for x in MONEY_RE.findall(sentence)
+                       if (_money_to_number(x) or 0) >= 1e6]
+            if len(amounts) > 1 and not AGGREGATE_RE.search(sentence):
+                continue  # components enumerated with no stated total
             m = MONEY_RE.search(sentence)
             if m and (_money_to_number(_clean(m.group(0))) or 0) >= 1e6:
                 size_history.append({"state": label, "value": _clean(m.group(0))})

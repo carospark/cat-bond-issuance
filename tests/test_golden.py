@@ -120,6 +120,23 @@ REJECT = {
     "citrus-re-ltd-series-2014-2": {"attachment_point": "$200m"},
 }
 
+# Deal-level size history. A state here must be the DEAL's size, never a
+# component's. Empty lists are meaningful assertions: Atlantic's only sizing
+# sentence is "$100 million class A variable-rate notes" and Mosaic's is "one of
+# $25m and one of $20m" -- neither states a deal size, so inventing one is the
+# bug. Kilimanjaro is the positive case: its class-scoped $300m used to mask the
+# real $625m upsize.
+SIZE_HISTORY = {
+    "kilimanjaro-re-ltd-series-2015-1": [("launch", "$300m"),
+                                         ("update_1", "$625 million")],
+    "atlantic-western-re-ltd": [],
+    "mosaic-re-ii-ltd": [],
+    "ursa-re-ltd-series-2015-1": [("launch", "$150m"), ("update_1", "$250m")],
+    "ibrd-car-jamaica-2026": [("launch", "$150 million"),
+                              ("update_1", "$200 million"),
+                              ("update_2", "$200 million")],
+}
+
 STOPWORDS = {"the", "this", "new", "a", "an", "its", "our"}
 results = []
 
@@ -286,6 +303,17 @@ def main():
             if st and st > len(rws):
                 check("tranche_count_understated" in r["tranche_flags"],
                       f"GUARD understated-flagged {slug}", r["tranche_flags"])
+
+        # GUARD: deal-level size history holds deal sizes only.
+        if slug in SIZE_HISTORY:
+            got = [(h["state"], h["value"])
+                   for h in (rec["size_history"]["value"] or [])]
+            check(got == SIZE_HISTORY[slug], f"EXPECT size_history {slug}",
+                  f"want={SIZE_HISTORY[slug]} got={got}")
+        # NOTE: "no deal state may equal a tranche size" looks like an
+        # invariant and is not. Kilimanjaro genuinely launched at $300m and its
+        # Class D genuinely settled at $300m. Coincidence, not contamination.
+        # The exact SIZE_HISTORY expectations above are the real guard.
 
         # GUARD: never emit a known-wrong value.
         for key, bad in REJECT.get(slug, {}).items():
