@@ -137,6 +137,8 @@ REJECT = {
     "hoplon-ii-insurance-ltd": {"spread_risk_margin": "11.25%"},
     # $200m/$350m are the Citrus 2014-1 layer bounds, not 2014-2's
     "citrus-re-ltd-series-2014-2": {"attachment_point": "$200m"},
+    # A cancelled deal must never report issued principal.
+    "gateway-re-ltd-series-2024-3": {"size": "$100 million"},
 }
 
 # Deal-level size history. A state here must be the DEAL's size, never a
@@ -379,7 +381,8 @@ def main():
                 fl = r.get("tranche_size_flags") or ""
                 # "not issued" is an explanation, not a parse failure.
                 check("tranche_size_missing" in fl or "tranche_not_issued" in fl
-                      or "tranche_sizes_unassignable" in fl,
+                      or "tranche_sizes_unassignable" in fl
+                      or "no_final_size" in fl,
                       f"GUARD missing-size-explained {slug}:{r['tranche_id']}",
                       repr(fl))
 
@@ -391,6 +394,16 @@ def main():
         check(not any(f["check"] == "spread>EL" for f in findings),
               f"GUARD spread>EL-is-not-a-violation {slug}",
               "collateral yield makes this a plausibility check, not an invariant")
+
+        # GUARD: terminal status suppresses any issued-principal figure.
+        if rec.get("deal_status", {}).get("value") in ("not_issued", "cancelled"):
+            for r in parse_tranches(rec):
+                check(r["tranche_size_final"] is None,
+                      f"GUARD no-principal-when-not-issued {slug}",
+                      f"got {r['tranche_size_final']!r}")
+            check(rec["size"]["value"] is None,
+                  f"GUARD no-tier1-size-when-not-issued {slug}",
+                  repr(rec["size"]["value"]))
 
     passed = sum(1 for ok, *_ in results if ok)
     for ok, label, detail in results:
