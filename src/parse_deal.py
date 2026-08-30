@@ -147,14 +147,16 @@ CLASS_SCOPED_RE = re.compile(r"\bClass\s+[A-Z0-9]", re.IGNORECASE)
 # that sentence also says "notes" and "protection".
 LOSS_LEVEL_RE = re.compile(
     r"deductible|attachment|attaches|exhaust|franchise|retention|"
-    r"limit per|per[- ]event limit|trigger point", re.IGNORECASE)
+    r"limit per|per[- ]event limit|trigger point|\blayer\b|term loan",
+    re.IGNORECASE)
 
 # "did not change in size" matched RESIZE_RE (change, size) and was accepted as
 # evidence FOR a resize. Negation must be checked before corroboration.
 NEGATED_RESIZE_RE = re.compile(
-    r"\b(?:did not|does not|will not|has not|have not)\s+"
-    r"(?:change|increase|decrease|grow|upsiz\w*)|\bunchanged\b|"
-    r"\bremained? (?:at|the same)\b", re.IGNORECASE)
+    r"\b(?:did not|does not|will not|has not|have not|was not|were not)\s+"
+    r"(?:change|increase|decrease|grow|upsiz\w*|alter\w*)|\bunchanged\b|"
+    r"\bremains?\s+(?:at|unchanged|the same)\b|"
+    r"\bremained?\s+(?:at|the same)\b|\bsame size\b", re.IGNORECASE)
 
 
 def _governed_by_loss_level(text, start, end):
@@ -176,8 +178,9 @@ PLACEHOLDERS = {"unknown", "?", "n/a", "na", "-", "\u2013", "\u2014",
 # Gateway Re 2024-3 reported $100m of principal.
 TERMINAL_STATUS = {"not issued": "not_issued"}
 CANCELLED_RE = re.compile(
-    r"\b(?:has been cancelled|was cancelled|been pulled|did not (?:proceed|complete)|"
-    r"will not (?:be issued|proceed))\b", re.IGNORECASE)
+    r"\b(?:has been cancelled|was cancelled|been (?:pulled|withdrawn)|"
+    r"was withdrawn|did not (?:proceed|complete)|was not completed|"
+    r"not to proceed|will not (?:be issued|proceed))\b", re.IGNORECASE)
 
 # core fields are expected on essentially every deal, so a low fill rate is a
 # bug. opportunistic fields are published only on a minority (mostly World Bank
@@ -254,7 +257,11 @@ def _add_years(month_year, years):
 
 def _segment_prose(prose):
     """Split narrative into ordered states: launch, then each Update block."""
-    parts = re.split(r"(Update\s*\d*\s*:)", prose, flags=re.IGNORECASE)
+    # Artemis writes "Update:", "Update 2:", "Update 2 (May 4th 2016):" and
+    # "Update, May 2018:". Matching only the bare forms glued four of
+    # Operational Re's updates into one state.
+    parts = re.split(r"(Update\s*\d*\s*(?:\([^)]{0,40}\)|,[^:\n]{0,30})?\s*:)",
+                     prose, flags=re.IGNORECASE)
     segments = [("launch", parts[0])]
     for i in range(1, len(parts) - 1, 2):
         segments.append((_clean(parts[i]).rstrip(":").lower().replace(" ", "_"),
@@ -754,6 +761,10 @@ if __name__ == "__main__":
 # directly removes the need for the veto.
 _M = r"([$\u20ac\u00a3\u00a5][\d,.]+\s*(?:million|billion|bn|m)?)"
 TRANCHE_SIZE_RES = [re.compile(x, re.IGNORECASE) for x in (
+    # A range states a target span; its LOW end is the launch figure. Matched
+    # first so that "between $25m and $100m in size" does not fall through to
+    # `_M + " in size"`, which returns the HIGH end (IBRD 111-112 Class B).
+    r"between\s+" + _M + r"\s+and\s+[$\u20ac\u00a3\u00a5][\d,.]+",
     r"size of " + _M,
     _M + r"\s+in size",
     r"(?:grew|upsiz\w+|settled|finalis\w+|finaliz\w+|target\w+|offered|priced|sized)"

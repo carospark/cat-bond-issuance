@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from fetch import fetch          # noqa: E402
 from validate import validate  # noqa: E402
+from sibling_registry import SiblingRegistry  # noqa: E402
 from parse_deal import _is_backward_reference, sentences  # noqa: E402
 from parse_deal import (parse_deal, parse_tranches, check_tranche_sum,  # noqa: E402
                         MONTHS, TIER1_KEYS)
@@ -121,11 +122,14 @@ TRANCHE_SIZES = {
 }
 
 # Deals whose tranche finals must sum to the Tier-1 deal size.
+# Seaside is deliberately ABSENT: its only "tranche" is a Bermuda regulatory
+# class misread as one, and because that phantom equals the deal total the sum
+# check passed -- positively validating an invented structure.
 TRANCHE_SUM_OK = {"triangle-re-2019-1-ltd", "atlantic-western-re-ltd",
                   "floodsmart-re-ltd-series-2024-1",
                   "residential-reinsurance-2026-limited-series-2026-1",
                   "kilimanjaro-re-ltd-series-2015-1",
-                  "ursa-re-ltd-series-2015-1", "seaside-re-series-2026-61"}
+                  "ursa-re-ltd-series-2015-1"}
 
 # Known-WRONG values, each observed in production before a fix. Asserting the
 # absence of a specific wrong answer is what makes these guards non-vacuous:
@@ -217,7 +221,39 @@ def unit_sentences():
         check(got == want, f"UNIT sentences {text[:44]!r}", f"want={want} got={got}")
 
 
+def unit_sibling_registry():
+    """Execute the sibling registry.
+
+    It was dead for four commits -- `sentences = sentences(prose)` shadowed the
+    imported function and every audit() raised UnboundLocalError -- because no
+    test ever called it. Exercising a module is the minimum bar; this also
+    asserts it still identifies a known predecessor figure.
+    """
+    reg = SiblingRegistry()
+    url = BASE + "windmill-ii-re-dac-2020/"
+    rec = parse_deal(fetch(url), deal_url=url)
+
+    try:
+        clean = reg.audit(url, rec, parse_tranches(rec))
+    except Exception as exc:                      # noqa: BLE001
+        check(False, "UNIT sibling-registry runs", f"{type(exc).__name__}: {exc}")
+        return
+    check(isinstance(clean, list), "UNIT sibling-registry runs", str(type(clean)))
+    check(not any(f["verdict"] == "LIKELY_CONTAMINATION" for f in clean),
+          "UNIT sibling-registry clean on current output", str(clean))
+
+    # The figure the year-rule now removes IS Windmill I's size; if it were
+    # still in the output the registry must name the sibling it belongs to.
+    planted = [{"tranche_id": None, "tranche_size_final": "$46 million",
+                "tranche_size_at_launch": None, "expected_loss": None,
+                "attachment_probability": None, "spread_risk_margin": None}]
+    found = reg.audit(url, rec, planted)
+    check(any(f["verdict"] == "LIKELY_CONTAMINATION" for f in found),
+          "UNIT sibling-registry detects planted contamination", str(found))
+
+
 def main():
+    unit_sibling_registry()
     unit_sentences()
     unit_backward_reference()
     for slug in PAGES:
@@ -404,6 +440,15 @@ def main():
             check(rec["size"]["value"] is None,
                   f"GUARD no-tier1-size-when-not-issued {slug}",
                   repr(rec["size"]["value"]))
+
+    # Pin the total. Guards are conditional on extracted data, so a regression
+    # that empties a field silently removes its checks and the suite still
+    # reports "all passed" on a smaller suite.
+    EXPECTED_CHECKS = 290
+    if len(results) != EXPECTED_CHECKS:
+        results.append((False, "GUARD check-count",
+                        f"expected {EXPECTED_CHECKS} checks, ran {len(results)}"
+                        " - update EXPECTED_CHECKS deliberately"))
 
     passed = sum(1 for ok, *_ in results if ok)
     for ok, label, detail in results:

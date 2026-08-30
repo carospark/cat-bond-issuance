@@ -91,7 +91,7 @@ class SiblingRegistry:
     def audit(self, deal_url, record, tranches=()):
         """Findings for one parsed deal. Reports; never mutates the record."""
         prose = record["_meta"]["full_details_text"] or ""
-        sentences = sentences(prose)
+        sents = sentences(prose)   # not `sentences` -- that shadows the import
         meta = self.meta.get(deal_url)
         issue_year = None
         m = re.search(r"(19\d\d|20\d\d)", record["date_of_issue"]["value"] or "")
@@ -118,7 +118,7 @@ class SiblingRegistry:
                     if s["num"] is not None and abs(s["num"] - num) < 1e-9]
             if not hits:
                 continue
-            hosts = [s for s in sentences if str(value) in s]
+            hosts = [s for s in sents if str(value) in s]
             backward = []
             for h in hosts:
                 yrs = [int(y) for y in re.findall(r"\b(19|20)\d\d\b", h)] or []

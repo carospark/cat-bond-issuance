@@ -17,8 +17,20 @@ USER_AGENT = (
 REQUEST_DELAY_SECONDS = 2
 
 
+def _normalise(url):
+    """Canonical form for cache identity.
+
+    The cache key hashed the verbatim URL, so ".../slug" and ".../slug/" were
+    different entries and the same page could be fetched twice. Trailing slash
+    and fragment are not part of a page's identity here.
+    """
+    parsed = urlparse(url)
+    return parsed._replace(path=parsed.path.rstrip("/"), fragment="").geturl()
+
+
 def _cache_path(url):
     """Derive a stable, readable filename in raw/ from a URL."""
+    url = _normalise(url)
     parsed = urlparse(url)
     slug = (parsed.netloc + parsed.path).strip("/")
     slug = "".join(c if c.isalnum() or c in "-._" else "_" for c in slug)

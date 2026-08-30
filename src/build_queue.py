@@ -26,14 +26,36 @@ from measure_contamination import family          # noqa: E402
 # -- so the raw family name splits one programme into several. Stripping the
 # roman numeral and any embedded year merges them, which is the whole point:
 # Windmill II's contaminating $46m IS Windmill I's size.
-ROMAN = r"\b(?:I{1,3}|IV|V|VI{0,3}|IX|X)\b"
+def _roman_numerals(limit=30):
+    """Roman numerals 1..limit, longest first so alternation matches greedily."""
+    vals = [(1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"),
+            (90, "XC"), (50, "L"), (40, "XL"), (10, "X"), (9, "IX"),
+            (5, "V"), (4, "IV"), (1, "I")]
+    out = []
+    for n in range(1, limit + 1):
+        rest, buf = n, ""
+        for v, sym in vals:
+            while rest >= v:
+                buf += sym
+                rest -= v
+        out.append(buf)
+    return sorted(out, key=len, reverse=True)
+
+
+# Programme generations run well past X: Dodeka reaches XXIV, Vitality XVII,
+# Queen Street XII. A hand-written I..X alternation left each of those as its
+# own family, which is exactly where the sibling registry is most needed.
+ROMAN = r"\b(?:" + "|".join(_roman_numerals(30)) + r")\b"
 
 
 def family_root(name):
     n = family(name)
     n = re.sub(ROMAN, " ", n)
     n = re.sub(r"\b(?:19|20)\d\d\b", " ", n)
-    return re.sub(r"\s+", " ", n).strip(" ,-")
+    # Stripping the year from "Radnor Re 2020-2" leaves "Radnor Re -2"; the
+    # orphaned series suffix then split 27 families across 65 deals.
+    n = re.sub(r"[-\u2013]\s*\d+[A-Za-z]?\b", " ", n)
+    return re.sub(r"\s+", " ", n).strip(" ,-\u2013")
 
 MONTHS = {m: i for i, m in enumerate(
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -55,9 +77,14 @@ def main():
     df["decade"] = df.year // 10 * 10
 
     # Families ordered by their earliest deal; deals ascending within family.
+    # The directory lists newest-first, so within one month the site order is
+    # backwards. Without this tiebreak Eclipse's Oct 2021 siblings emerge
+    # 08A, 07A, 06A, 05A and the registry treats later deals as ancestors.
+    df["site_pos"] = range(len(df))
     first = df.groupby("family")["ord"].min().rename("family_first")
     df = df.join(first, on="family").sort_values(
-        ["family_first", "family", "ord"], kind="stable").reset_index(drop=True)
+        ["family_first", "family", "ord", "site_pos"],
+        ascending=[True, True, True, False], kind="stable").reset_index(drop=True)
     df["family_seq"] = df.groupby("family").cumcount() + 1
     df["family_size"] = df.groupby("family")["family"].transform("size")
 
