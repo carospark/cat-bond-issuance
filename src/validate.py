@@ -25,7 +25,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
-from parse_deal import _money_to_number, _currency   # noqa: E402
+from parse_deal import _money_to_number, _currency, sentences   # noqa: E402
 
 WORD_COUNT = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
 
@@ -116,7 +116,7 @@ def validate(rec, tranches, index_row=None):
     # SIBLING deal ("the two tranches from the Gateway Re 2024-1 deal"): note
     # that a same-year sibling defeats the year heuristic entirely, which is
     # why the sibling registry exists.
-    for sent in re.split(r"(?<=\.)\s+", prose):
+    for sent in sentences(prose):
         m = re.search(r"(?<![\d-])\b(one|two|three|four|five|six|\d{1,2})\s+tranches\b",
                       sent, re.I)
         if not (m and tranches):

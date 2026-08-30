@@ -25,7 +25,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
-from parse_deal import _money_to_number, _clean   # noqa: E402
+from parse_deal import _money_to_number, _clean, sentences   # noqa: E402
 
 COMPARATIVE = re.compile(
     r"\b(previous|prior|predecessor|last year|earlier|maturing|compared to|"
@@ -91,7 +91,7 @@ class SiblingRegistry:
     def audit(self, deal_url, record, tranches=()):
         """Findings for one parsed deal. Reports; never mutates the record."""
         prose = record["_meta"]["full_details_text"] or ""
-        sentences = [s for s in re.split(r"(?<=\.)\s+", prose) if s.strip()]
+        sentences = sentences(prose)
         meta = self.meta.get(deal_url)
         issue_year = None
         m = re.search(r"(19\d\d|20\d\d)", record["date_of_issue"]["value"] or "")

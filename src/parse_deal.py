@@ -233,12 +233,64 @@ def _segment_prose(prose):
     return [(label, text) for label, text in segments if _clean(text)]
 
 
+# ---------------------------------------------------------------------------
+# Sentence segmentation
+#
+# `sentences(text)` fires on every abbreviation: 37 of 409 split
+# points across the cached corpus sit inside "U.S.", "Ltd." or "Inc.". Every
+# sentence-scoped rule -- label scoping, sizing context, backward-reference
+# detection, stated-count validation, sibling auditing -- then runs on
+# fragments. One helper, used everywhere, so the definition of "sentence" is
+# the same in all of them.
+#
+# A blanket "never split after Ltd." is wrong: "Windmill I Re Ltd. (Series
+# 2013-1)" is a continuation but "Radnor Re 2020-2 Ltd. The SPI has issued..."
+# is a genuine boundary. So company suffixes split only before a new uppercase
+# subject, while U.S./U.K./D.C. never split -- "U.S. Virgin Islands" and
+# "U.S. Treasury" are far more common here than a sentence starting after them.
+# ---------------------------------------------------------------------------
+
+ALWAYS_NONTERMINAL = re.compile(
+    r"(?:^|\s)(?:U\.S|U\.K|D\.C|N\.V|S\.A|e\.g|i\.e)\.$", re.IGNORECASE)
+SUFFIX_NONTERMINAL = re.compile(
+    r"(?:^|\s)(?:Inc|Ltd|Co|Cos|Corp|plc|No|St|Mr|Ms|Dr|approx|Bros)\.$",
+    re.IGNORECASE)
+
+_SPAN_CACHE = {}
+
+
+def _sentence_spans(text):
+    """[(start, end)] of sentences, abbreviation-aware."""
+    if text in _SPAN_CACHE:
+        return _SPAN_CACHE[text]
+    spans, start = [], 0
+    for m in re.finditer(r"\.\s+", text):
+        head = text[start:m.start() + 1]
+        nxt = text[m.end():m.end() + 1]
+        if ALWAYS_NONTERMINAL.search(head):
+            continue
+        if SUFFIX_NONTERMINAL.search(head) and not nxt.isupper():
+            continue  # "Ltd. (Series ..." / "Ltd. catastrophe ..." continues
+        spans.append((start, m.start() + 1))
+        start = m.end()
+    if start < len(text):
+        spans.append((start, len(text)))
+    if len(_SPAN_CACHE) < 64:
+        _SPAN_CACHE[text] = spans
+    return spans
+
+
+def sentences(text):
+    """Sentences of text, abbreviation-aware. The one splitter to use."""
+    return [text[a:b] for a, b in _sentence_spans(text or "") if text[a:b].strip()]
+
+
 def _sentence_at(text, pos):
     """The sentence containing character offset `pos`."""
-    start = text.rfind(". ", 0, pos)
-    start = 0 if start < 0 else start + 2
-    end = text.find(". ", pos)
-    return text[start:(end + 1 if end >= 0 else len(text))]
+    for a, b in _sentence_spans(text):
+        if a <= pos < b:
+            return text[a:b]
+    return text
 
 
 def _series_tokens(text):
@@ -392,7 +444,7 @@ def parse_deal(html, deal_url=None):
     # ---- Time series: how terms moved while marketing --------------------
     size_history, skipped_backref = [], 0
     for label, text in segments:
-        for sentence in re.split(r"(?<=\.)\s+", text):
+        for sentence in sentences(text):
             if _is_backward_reference(sentence, issue_year, own_series):
                 if MONEY_RE.search(sentence):
                     skipped_backref += 1
@@ -702,8 +754,10 @@ TRANCHE_PATTERNS = {
 
 
 def _sentence_start(text, pos):
-    i = text.rfind(". ", 0, pos)
-    return 0 if i < 0 else i + 2
+    for a, b in _sentence_spans(text):
+        if a <= pos < b:
+            return a
+    return 0
 
 
 def _clause_start(text, pos):
@@ -851,7 +905,7 @@ def _bindings_by_label(prose):
         out.setdefault(("Class " + m.group(2)).upper(), []).append(_clean(m.group(1)))
     # Shared-subject constructions: "Both the Class A and Class B tranche of
     # notes are sized at EUR 25m each" states ONE amount that belongs to BOTH.
-    for sentence in re.split(r"(?<=\.)\s+", prose or ""):
+    for sentence in sentences(prose or ""):
         if not re.search(r"\beach\b", sentence, re.IGNORECASE):
             continue
         labels = {("Class " + g).upper() for g in CLASS_RE.findall(sentence)
@@ -896,7 +950,7 @@ def _mine_sizes(label, text, ctx, exclude_total):
     # Pass 1 demands the sentence name this class. If nothing is found, pass 2
     # drops that scoping but keeps the anchored size idioms.
     for require_label in (True, False):
-        for sentence in re.split(r"(?<=\.)\s+", text):
+        for sentence in sentences(text):
             if _is_backward_reference(sentence, ctx["issue_year"],
                                       ctx.get("own_series", frozenset())):
                 if require_label and MONEY_RE.search(sentence):
@@ -1004,7 +1058,7 @@ def parse_tranches(record):
     # describe the tranches individually, so there is nothing to split on. We
     # do NOT fabricate rows for them -- we carry the discrepancy instead.
     stated = None
-    for sent in re.split(r"(?<=\.)\s+", ctx["prose"]):
+    for sent in sentences(ctx["prose"]):
         own = set(re.findall(r"\b(20\d\d-\d+)\b", record["deal_name"]["value"] or ""))
         if set(re.findall(r"\b(20\d\d-\d+)\b", sent)) - own:
             continue  # describes a sibling deal

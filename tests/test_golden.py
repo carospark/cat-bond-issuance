@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from fetch import fetch          # noqa: E402
 from validate import validate  # noqa: E402
-from parse_deal import _is_backward_reference  # noqa: E402
+from parse_deal import _is_backward_reference, sentences  # noqa: E402
 from parse_deal import (parse_deal, parse_tranches, check_tranche_sum,  # noqa: E402
                         MONTHS, TIER1_KEYS)
 
@@ -193,7 +193,30 @@ def unit_backward_reference():
         check(got == want, f"UNIT backref {sentence[:44]!r}", f"want={want} got={got}")
 
 
+def unit_sentences():
+    """Pin the segmenter directly.
+
+    A blanket "never split after Ltd." is wrong and a naive `(?<=\.)\s+` is
+    wrong in the other direction; only the uppercase-subject rule separates
+    "Ltd. (Series 2013-1)" from "Ltd. The SPI has issued".
+    """
+    cases = [
+        ("Windmill I Re Ltd. (Series 2013-1) was the first.", 1),
+        ("Radnor Re 2020-2 Ltd. The SPI has issued five tranches.", 2),
+        ("issued by Finca Re Ltd. catastrophe bond notes follow.", 1),
+        ("covers U.S. Virgin Islands and U.S. Treasury exposure.", 1),
+        ("across the U.S. tropical cyclone belt.", 1),
+        ("A first sentence. A second sentence.", 2),
+        ("FEMA Inc. The layer was secured.", 2),   # Inc. + uppercase = boundary
+        ("FEMA Inc. and its partners secured it.", 1),   # + lowercase = not
+    ]
+    for text, want in cases:
+        got = len(sentences(text))
+        check(got == want, f"UNIT sentences {text[:44]!r}", f"want={want} got={got}")
+
+
 def main():
+    unit_sentences()
     unit_backward_reference()
     for slug in PAGES:
         rec = parse_deal(fetch(BASE + slug + "/"), deal_url=BASE + slug + "/")

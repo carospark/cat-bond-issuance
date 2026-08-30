@@ -21,7 +21,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 from fetch import fetch                              # noqa: E402
-from parse_deal import parse_deal, parse_tranches, TIER2_PATTERNS  # noqa: E402
+from parse_deal import parse_deal, parse_tranches, TIER2_PATTERNS, sentences  # noqa: E402
 
 BASE = "https://www.artemis.bm/deal-directory/"
 PAGES = ["ibrd-car-jamaica-2026", "floodsmart-re-ltd-series-2024-1",
@@ -64,7 +64,7 @@ def main():
         sponsor = meta.iloc[0].sponsor if len(meta) else ""
         issue_year = int(re.search(r"(\d{4})", rec["date_of_issue"]["value"] or "0").group(1))
 
-        sentences = [s for s in re.split(r"(?<=\.)\s+", prose) if s.strip()]
+        sentences = sentences(prose)
         flagged = []
         for sent in sentences:
             years = {int(y) for y in re.findall(r"\b(19\d\d|20\d\d)\b", sent)}
