@@ -654,7 +654,7 @@ _M = r"([$\u20ac\u00a3\u00a5][\d,.]+\s*(?:million|billion|bn|m)?)"
 TRANCHE_SIZE_RES = [re.compile(x, re.IGNORECASE) for x in (
     r"size of " + _M,
     _M + r"\s+in size",
-    r"(?:grew|upsiz\w+|settled|finalis\w+|finaliz\w+|target\w+|offered|priced)"
+    r"(?:grew|upsiz\w+|settled|finalis\w+|finaliz\w+|target\w+|offered|priced|sized)"
     r"\s+(?:to|at|as)\s+(?:up to |between )?" + _M,
     _M + r"\s+Class\s+[A-Z0-9]+",
     r"(?:tranche|notes)[^.]{0,20}?of " + _M,
@@ -798,6 +798,8 @@ def _tranche_context(record):
         "deal_total": _money_to_number(record["size"]["value"] or "") or None,
         "deal_launch": next((h["value"] for h in hist
                              if h["state"] == "launch"), None),
+        "own_series": _series_tokens(record["deal_name"]["value"] or ""),
+        "bindings": _bindings_by_label(record["_meta"]["full_details_text"] or ""),
     }
 
 
@@ -829,6 +831,63 @@ def _extract_tranche_metrics(text, ctx):
     return row
 
 
+LABEL_BOUND_RE = re.compile(
+    # \s* not \s+: _M already ends with \s*, which consumed the separator, so
+    # \s+ could never match and this regex silently never fired.
+    _M + r"\s*(?:tranche\s+of\s+)?Class\s+([A-Z]{1,3}-\d+[A-Z]?|[A-Z]{1,3}\b|\d{1,2}\b)",
+    re.IGNORECASE)
+
+
+def _bindings_by_label(prose):
+    """{label: [amounts]} for every "AMOUNT [tranche of] Class X" in the prose.
+
+    Computed over the WHOLE prose, deliberately. A positional check inside a
+    tranche window cannot work: the window for Class M-2 ends immediately
+    before "Class B-1", so the slice holds "$16,821,000 tranche of " with the
+    label that owns it cut off, and M-2 reported B-1's size.
+    """
+    out = {}
+    for m in LABEL_BOUND_RE.finditer(prose or ""):
+        out.setdefault(("Class " + m.group(2)).upper(), []).append(_clean(m.group(1)))
+    # Shared-subject constructions: "Both the Class A and Class B tranche of
+    # notes are sized at EUR 25m each" states ONE amount that belongs to BOTH.
+    for sentence in re.split(r"(?<=\.)\s+", prose or ""):
+        if not re.search(r"\beach\b", sentence, re.IGNORECASE):
+            continue
+        labels = {("Class " + g).upper() for g in CLASS_RE.findall(sentence)
+                  if g.upper() not in CLASS_STOPWORDS}
+        if len(labels) < 2:
+            continue
+        amounts = [x for x in MONEY_RE.findall(sentence)
+                   if (_money_to_number(x) or 0) >= 1e6]
+        if len(amounts) == 1:
+            for lab in labels:
+                out.setdefault(lab, []).append(_clean(amounts[0]))
+    return out
+
+
+def _bound_to_other_label(cand, label, bindings):
+    """True if this amount is explicitly bound to a different class."""
+    if not label or not bindings:
+        return False
+    mine = bindings.get(label.upper(), [])
+    if cand in mine:
+        return False
+    return any(cand in amts for lab, amts in bindings.items()
+               if lab != label.upper())
+
+
+def _bound_size_for(label, prose):
+    """Amounts explicitly bound to this label anywhere in the prose."""
+    if not label:
+        return []
+    out = []
+    for m in LABEL_BOUND_RE.finditer(prose):
+        if ("Class " + m.group(2)).upper() == label.upper():
+            out.append(_clean(m.group(1)))
+    return out
+
+
 def _mine_sizes(label, text, ctx, exclude_total):
     """Ordered size mentions in one window: first is launch, last is final."""
     sizes, skipped, dropped = [], 0, 0
@@ -838,7 +897,8 @@ def _mine_sizes(label, text, ctx, exclude_total):
     # drops that scoping but keeps the anchored size idioms.
     for require_label in (True, False):
         for sentence in re.split(r"(?<=\.)\s+", text):
-            if _is_backward_reference(sentence, ctx["issue_year"]):
+            if _is_backward_reference(sentence, ctx["issue_year"],
+                                      ctx.get("own_series", frozenset())):
                 if require_label and MONEY_RE.search(sentence):
                     skipped += 1
                 continue
@@ -852,6 +912,8 @@ def _mine_sizes(label, text, ctx, exclude_total):
                 num = _money_to_number(cand) or 0
                 if num < 1e6:
                     continue
+                if _bound_to_other_label(cand, label, ctx.get("bindings")):
+                    continue  # this amount explicitly names another tranche
                 if (exclude_total and ctx["deal_total"]
                         and abs(num - ctx["deal_total"]) / ctx["deal_total"] <= 0.01):
                     dropped += 1
@@ -879,6 +941,22 @@ def _size_row(launch, final, states, flags):
 def _size_multi(label, text, ctx):
     """BRANCH: several tranches. Mine the window; Tier 1 constrains it."""
     sizes, skipped, dropped = _mine_sizes(label, text, ctx, exclude_total=True)
+    extra = []
+    if not sizes:
+        # Explicit binding beats window geometry: Triangle's Class B-1 amount
+        # sits outside its window entirely.
+        # Use the prebuilt map, which also carries shared-subject "each"
+        # distributions that a direct rescan of the prose would miss.
+        sizes = list((ctx.get("bindings") or {}).get((label or "").upper(), []))
+        if sizes:
+            extra.append("size_from_label_binding")
+    if not sizes and dropped:
+        # The only candidate was rejected for equalling the deal total. On
+        # ResRe 2020 that total IS Class 13's size, because Class 12 "will not
+        # be issued at all". Refusing to report it created a phantom gap.
+        sizes, _s, _d = _mine_sizes(label, text, ctx, exclude_total=False)
+        if sizes:
+            extra.append("equals_deal_total_accepted")
     anchored = bool(re.search(
         r"finalis|finaliz|priced|final(?:ly)? |secured|settled", text, re.IGNORECASE))
     flags = []
@@ -886,8 +964,9 @@ def _size_multi(label, text, ctx):
         flags.append("tranche_size_final_unanchored")
     if skipped:
         flags.append("foreign_deal_reference_excluded=%d_sentence(s)" % skipped)
-    if dropped:
+    if dropped and "equals_deal_total_accepted" not in extra:
         flags.append("deal_total_excluded=%d" % dropped)
+    flags.extend(extra)
     return _size_row(sizes[0] if sizes else None,
                      sizes[-1] if sizes else None, len(sizes), flags)
 
@@ -966,6 +1045,11 @@ def parse_tranches(record):
             row["tranche_size_flags"] = ";".join(
                 x for x in [row.get("tranche_size_flags"),
                             "tranche_sizes_unassignable"] if x)
+        elif label and not row.get("tranche_size_final") and re.search(
+                re.escape(label) + r"[^.]{0,120}?will not be issued",
+                ctx["prose"], re.IGNORECASE):
+            row["tranche_size_flags"] = ";".join(
+                x for x in [row.get("tranche_size_flags"), "tranche_not_issued"] if x)
         elif label and not row.get("tranche_size_final"):
             # A NAMED tranche with no size is a parse failure, not an absence.
             # These previously carried an empty flag string and slipped past

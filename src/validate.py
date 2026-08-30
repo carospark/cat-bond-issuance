@@ -90,7 +90,12 @@ def validate(rec, tranches, index_row=None):
     # extraction bypassed parts-vs-whole validation entirely. Say so instead.
     labelled = [t for t in tranches if t.get("tranche_id")]
     if labelled and rec["size"]["value"]:
-        missing = [t["tranche_id"] for t in labelled if not t.get("tranche_size_final")]
+        # A tranche the page says was never issued has no size as a matter of
+        # fact, not of extraction. ResRe 2020: "The higher risk Class 12
+        # tranche of notes will not be issued at all".
+        missing = [t["tranche_id"] for t in labelled
+                   if not t.get("tranche_size_final")
+                   and "tranche_not_issued" not in (t.get("tranche_size_flags") or "")]
         if missing:
             add("VIOLATION", "tranche_sizes_complete",
                 "%d/%d labelled tranches have no size: %s"

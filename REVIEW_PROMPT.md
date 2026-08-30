@@ -1,4 +1,40 @@
-# Adversarial review request: Artemis cat bond parser
+# Adversarial review request (round 2): Artemis cat bond parser
+
+## Round 1 outcome — do not re-report these
+
+A previous review found 8 wrong outputs behind 153 passing tests. All 8 were
+reproduced; 7 are fixed and the 8th is now flagged rather than silent:
+
+- year-rule off-by-one (`< year - 1`), which let a predecessor's coupon through
+- `CLASS_RE` case-sensitivity (lowercase "class A" dropped) and stopword
+  over-match ("class of" -> a tranche called `Class OF`)
+- tranche windows snapping to sentence rather than clause, losing sizes in
+  semicolon-separated lists
+- a guidance range's low end returned as the settled spread
+- same-year sibling contamination (foreign-series exclusion added)
+- stated-multi deals given single-tranche economics
+- dollar-only tranche-size grammar
+- deal-level `size_history` recording a component's size
+
+Tests went 153 -> 263: a `REJECT` table of known-wrong values, predicate unit
+tests, and mutation testing of each guard. Two proposed rules were REJECTED as
+not actually invariant, and I would like that judgement checked: `spread > EL`
+(collateral yield) and "no deal state may equal a tranche size" (Kilimanjaro
+launched at $300m and its Class D settled at $300m).
+
+## Known-open — confirm or refute the diagnosis, do not just restate it
+
+1. Hoplon II Class A/B have no sizes: "EUR 25m each" shared-subject phrasing.
+2. Triangle Re Class B-1 and ResRe 2020 Class 12/13 have no sizes.
+3. Sentence segmentation still splits on "U.S."/"Ltd."/"Inc.".
+4. Seaside 2026-61 yields a false `Class 3` (an insurer regulatory class).
+5. ResRe 2010 / Trinity / Mosaic state a tranche count but never describe the
+   tranches; one row plus `tranche_count_understated` is intentional.
+
+Priority for this round: defects OUTSIDE the above list, and any place a round-1
+fix is wrong, incomplete, or has introduced a new failure.
+
+
 
 Review the parsing code and logic in `src/` and `tests/`. I want correctness
 problems and unsound reasoning, not style. Be adversarial and specific.
@@ -12,7 +48,7 @@ Aug 2026) into structured data. `raw/` holds 29 cached HTML pages: the deal-dire
 review runs off `raw/`. The source also restricts AI use of its content, so work
 only from what is already cached.
 
-Run tests with `./.venv/bin/python tests/test_golden.py` (153 checks, currently
+Run tests with `./.venv/bin/python tests/test_golden.py` (263 checks, currently
 all passing). Python is 3.9 - no match statements, no `X | Y` type syntax.
 
 ## Architecture (read `src/parse_deal.py` docstrings first)
@@ -78,7 +114,7 @@ parts-vs-whole, arithmetic (EL<=AP), ordering (EP<=EL<=AP), economics
 (spread>EL), self-description (stated tranche count). What relationships MUST
 hold in this data that are not yet checked?
 
-**H. Test quality.** Are the 153 golden checks actually discriminating, or are
+**H. Test quality.** Are the 263 golden checks actually discriminating, or are
 any tautological / vacuously passing? Which of the fixes in `parse_deal.py`
 could I break without a test failing?
 

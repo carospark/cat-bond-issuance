@@ -93,6 +93,24 @@ TRANCHE_SIZES = {
         "Class A": ("$100 million", "$100 million"),
         "Class B": ("$200 million", "$200 million"),
     },
+    # Three tranches in ONE comma-separated sentence. Window boundaries put
+    # B-1's amount inside M-2's window, so M-2 reported B-1's size.
+    "triangle-re-2019-1-ltd": {
+        "Class M-1": ("$134,574,000", "$134,574,000"),
+        "Class M-2": ("$151,396,000", "$151,396,000"),
+        "Class B-1": ("$16,821,000", "$16,821,000"),
+    },
+    # "Both the Class A and Class B tranche of notes are sized at EUR 25m each"
+    # -- one amount, two owners.
+    "hoplon-ii-insurance-ltd": {
+        "Class A": ("\u20ac25m", "\u20ac25m"),
+        "Class B": ("\u20ac25m", "\u20ac25m"),
+    },
+    # Class 13 IS the whole deal because Class 12 "will not be issued at all",
+    # so the no-tranche-equals-the-total rule must not suppress it.
+    "residential-reinsurance-2020-limited-series-2020-1": {
+        "Class 13": ("$100 million", "$100 million"),
+    },
     # Five classes in ONE semicolon-separated sentence; four sizes were lost.
     "radnor-re-2020-2-ltd": {
         "Class M-1A": ("$79,832,000", "$79,832,000"),
@@ -103,7 +121,8 @@ TRANCHE_SIZES = {
 }
 
 # Deals whose tranche finals must sum to the Tier-1 deal size.
-TRANCHE_SUM_OK = {"floodsmart-re-ltd-series-2024-1",
+TRANCHE_SUM_OK = {"triangle-re-2019-1-ltd", "atlantic-western-re-ltd",
+                  "floodsmart-re-ltd-series-2024-1",
                   "residential-reinsurance-2026-limited-series-2026-1",
                   "kilimanjaro-re-ltd-series-2015-1",
                   "ursa-re-ltd-series-2015-1", "seaside-re-series-2026-61"}
@@ -334,9 +353,12 @@ def main():
         # GUARD: a NAMED tranche with no size must be flagged, never silent.
         for r in rws2:
             if r.get("tranche_id") and not r.get("tranche_size_final"):
-                check("tranche_size_missing" in (r.get("tranche_size_flags") or ""),
-                      f"GUARD missing-size-flagged {slug}:{r['tranche_id']}",
-                      repr(r.get("tranche_size_flags")))
+                fl = r.get("tranche_size_flags") or ""
+                # "not issued" is an explanation, not a parse failure.
+                check("tranche_size_missing" in fl or "tranche_not_issued" in fl
+                      or "tranche_sizes_unassignable" in fl,
+                      f"GUARD missing-size-explained {slug}:{r['tranche_id']}",
+                      repr(fl))
 
         # GUARD: the validator actually runs, and its severities are sane.
         findings = validate(rec, rws2, None)
