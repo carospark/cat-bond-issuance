@@ -662,8 +662,14 @@ def parse_deal(html, deal_url=None):
 
     raw_size = (record["size"].get("raw_value") or "").strip().lower()
     status = TERMINAL_STATUS.get(raw_size)
-    if status is None and prose and CANCELLED_RE.search(prose):
-        status = "cancelled"
+    if status is None and prose:
+        # Deal-scoped only. "The higher risk Class 12 tranche ... will not be
+        # issued at all" is a TRANCHE fact; reading it as a deal cancellation
+        # marked the issued ResRe 2020 as never issued.
+        for sent in sentences(prose):
+            if CANCELLED_RE.search(sent) and not CLASS_SCOPED_RE.search(sent):
+                status = "cancelled"
+                break
     record["deal_status"] = _field(
         status or "issued",
         "high" if status else "medium",
