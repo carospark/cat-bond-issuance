@@ -21,6 +21,7 @@ build/
 .venv/
 venv/
 .env
+.cache/
 
 .claude/
 notebooks/
@@ -32,3 +33,5 @@ notebook/
 # produces them is tracked; the content is not. Re-fetch with src/fetch.py.
 raw/
 data/*.csv
+plots/*.png
+plots/*.svg

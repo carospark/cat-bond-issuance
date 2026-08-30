@@ -95,7 +95,8 @@ def validate(rec, tranches, index_row=None):
         # tranche of notes will not be issued at all".
         missing = [t["tranche_id"] for t in labelled
                    if not t.get("tranche_size_final")
-                   and "tranche_not_issued" not in (t.get("tranche_size_flags") or "")]
+                   and "tranche_not_issued" not in (t.get("tranche_size_flags") or "")
+                   and "no_final_size" not in (t.get("tranche_size_flags") or "")]
         if missing:
             add("VIOLATION", "tranche_sizes_complete",
                 "%d/%d labelled tranches have no size: %s"

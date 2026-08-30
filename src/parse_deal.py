@@ -140,6 +140,26 @@ SIZING_CTX_RE = re.compile(
 # launch reads "comes out of the blocks at $300m in size, split into two
 # tranches", which is deal-scoped despite naming them.
 CLASS_SCOPED_RE = re.compile(r"\bClass\s+[A-Z0-9]", re.IGNORECASE)
+
+# Money governed by a loss-level noun is never a SIZE. Finca's "$15 million
+# event deductible" became the deal's launch size and a +400% phantom upsize.
+# Checked LOCALLY around the amount: a sentence-level test is useless because
+# that sentence also says "notes" and "protection".
+LOSS_LEVEL_RE = re.compile(
+    r"deductible|attachment|attaches|exhaust|franchise|retention|"
+    r"limit per|per[- ]event limit|trigger point", re.IGNORECASE)
+
+# "did not change in size" matched RESIZE_RE (change, size) and was accepted as
+# evidence FOR a resize. Negation must be checked before corroboration.
+NEGATED_RESIZE_RE = re.compile(
+    r"\b(?:did not|does not|will not|has not|have not)\s+"
+    r"(?:change|increase|decrease|grow|upsiz\w*)|\bunchanged\b|"
+    r"\bremained? (?:at|the same)\b", re.IGNORECASE)
+
+
+def _governed_by_loss_level(text, start, end):
+    """True if a loss-level noun sits immediately around this amount."""
+    return bool(LOSS_LEVEL_RE.search(text[max(0, start - 45):end + 45]))
 AGGREGATE_RE = re.compile(r"\btotal|combined|aggregate|altogether|in all\b",
                           re.IGNORECASE)
 
@@ -149,6 +169,15 @@ AGGREGATE_RE = re.compile(r"\btotal|combined|aggregate|altogether|in all\b",
 # worked". Confidence stays high -- we are confident the source said nothing.
 PLACEHOLDERS = {"unknown", "?", "n/a", "na", "-", "\u2013", "\u2014",
                 "tbc", "tbd", "not issued", "none", "not known"}
+
+# "Not issued" is not missing data -- it is a terminal fact. Collapsing it into
+# the same None as "Unknown" let _size_single read the absent Tier-1 final as
+# permission to promote a prose TARGET to issued principal, so cancelled
+# Gateway Re 2024-3 reported $100m of principal.
+TERMINAL_STATUS = {"not issued": "not_issued"}
+CANCELLED_RE = re.compile(
+    r"\b(?:has been cancelled|was cancelled|been pulled|did not (?:proceed|complete)|"
+    r"will not (?:be issued|proceed))\b", re.IGNORECASE)
 
 # core fields are expected on essentially every deal, so a low fill rate is a
 # bug. opportunistic fields are published only on a minority (mostly World Bank
@@ -453,6 +482,10 @@ def parse_deal(html, deal_url=None):
                 continue  # money here is not a deal size
             if CLASS_SCOPED_RE.search(sentence):
                 continue  # a tranche's size, not the deal's
+            m_first = MONEY_RE.search(sentence)
+            if m_first and _governed_by_loss_level(sentence, m_first.start(),
+                                                   m_first.end()):
+                continue  # a deductible/attachment level, not a size
             amounts = [x for x in MONEY_RE.findall(sentence)
                        if (_money_to_number(x) or 0) >= 1e6]
             if len(amounts) > 1 and not AGGREGATE_RE.search(sentence):
@@ -500,7 +533,8 @@ def parse_deal(html, deal_url=None):
         elif a and b and abs(a - b) / a > 0.01:
             reason = next(
                 (_clean(t)[:200] for lbl, t in segments
-                 if lbl != "launch" and RESIZE_RE.search(t)), None)
+                 if lbl != "launch" and RESIZE_RE.search(t)
+                 and not NEGATED_RESIZE_RE.search(t)), None)
             if reason is None:
                 # No explicit resize language anywhere: almost certainly the
                 # "launch" figure was never a size at all. Refuse to invent it.
@@ -625,6 +659,16 @@ def parse_deal(html, deal_url=None):
         True if prose and re.search(r"\boversubscribed\b", prose, re.I) else None,
         "medium" if prose and re.search(r"\boversubscribed\b", prose, re.I) else None,
         "keyword")
+
+    raw_size = (record["size"].get("raw_value") or "").strip().lower()
+    status = TERMINAL_STATUS.get(raw_size)
+    if status is None and prose and CANCELLED_RE.search(prose):
+        status = "cancelled"
+    record["deal_status"] = _field(
+        status or "issued",
+        "high" if status else "medium",
+        "tier1_raw+prose", raw_size or None,
+        ["terminal_status"] if status else [])
 
     placeholder_hits = [k for k in TIER1_KEYS
                         if any(str(x).startswith("source_placeholder")
@@ -853,6 +897,7 @@ def _tranche_context(record):
         "deal_launch": next((h["value"] for h in hist
                              if h["state"] == "launch"), None),
         "own_series": _series_tokens(record["deal_name"]["value"] or ""),
+        "deal_status": record.get("deal_status", {}).get("value"),
         "bindings": _bindings_by_label(record["_meta"]["full_details_text"] or ""),
     }
 
@@ -968,6 +1013,8 @@ def _mine_sizes(label, text, ctx, exclude_total):
                     continue
                 if _bound_to_other_label(cand, label, ctx.get("bindings")):
                     continue  # this amount explicitly names another tranche
+                if _governed_by_loss_level(sentence, m.start(1), m.end(1)):
+                    continue  # a loss level, not a size
                 if (exclude_total and ctx["deal_total"]
                         and abs(num - ctx["deal_total"]) / ctx["deal_total"] <= 0.01):
                     dropped += 1
@@ -1029,6 +1076,11 @@ def _size_single(label, text, ctx):
     """BRANCH: one tranche. It IS the deal, so Tier 1 answers directly."""
     sizes, skipped, _ = _mine_sizes(label, text, ctx, exclude_total=False)
     launch = ctx["deal_launch"] or (sizes[0] if sizes else None)
+    if ctx.get("deal_status") in ("not_issued", "cancelled"):
+        # No Tier-1 final exists BECAUSE the deal never issued. Promoting the
+        # prose target to "final" reported principal that does not exist.
+        return _size_row(launch, None, len(sizes),
+                         ["no_final_size:%s" % ctx["deal_status"]])
     final = ctx["deal_size"] or (sizes[-1] if sizes else None)
     flags = ["final_from_tier1"] if ctx["deal_size"] else []
     if skipped:
@@ -1104,7 +1156,8 @@ def parse_tranches(record):
                 ctx["prose"], re.IGNORECASE):
             row["tranche_size_flags"] = ";".join(
                 x for x in [row.get("tranche_size_flags"), "tranche_not_issued"] if x)
-        elif label and not row.get("tranche_size_final"):
+        elif (label and not row.get("tranche_size_final")
+              and "no_final_size" not in (row.get("tranche_size_flags") or "")):
             # A NAMED tranche with no size is a parse failure, not an absence.
             # These previously carried an empty flag string and slipped past
             # check_tranche_sum, which returns n/a when any size is missing.
