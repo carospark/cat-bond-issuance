@@ -31,8 +31,12 @@ COMPARATIVE = re.compile(
     r"\b(previous|prior|predecessor|last year|earlier|maturing|compared to|"
     r"which eventually|that\s+\d{4})\b", re.IGNORECASE)
 
+# Tier-2 fields ONLY. `size` is read structurally from the summary list, not
+# mined from prose, so it cannot be contaminated by a neighbouring sentence.
+# Auditing it flagged FloodSmart 2024-1's genuine $575m as borrowed, purely
+# because its 2021-1 sibling was also $575m and a nearby sentence says so.
 CHECK_FIELDS = ["expected_loss", "attachment_probability", "spread_risk_margin",
-                "size", "maturity_date"]
+                "maturity_date"]
 
 
 def _numeric(text):
