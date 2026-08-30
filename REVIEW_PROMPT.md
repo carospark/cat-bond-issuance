@@ -1,160 +1,169 @@
-# Adversarial review request (round 2): Artemis cat bond parser
+# Adversarial review request (round 3): Artemis cat bond parser
 
-Review the parsing code and logic in `src/` and `tests/`. I want correctness
-problems and unsound reasoning, not style. Be adversarial and specific.
+You are the third independent reviewer. The two before you found **8 and 9 real
+defects respectively**, every one reproducible, several of them wrong values
+sitting in the output. Assume more remain. The most valuable thing you can do is
+find the ones your predecessors and I both missed.
 
-**Do not make network requests.** `fetch()` is cache-first; `raw/` holds 29
-cached pages (the deal-directory index plus 28 deal pages). The source also
-restricts AI use of its content, so work only from what is already cached.
+## What this is
 
-Run tests with `./.venv/bin/python tests/test_golden.py` (284 checks, currently
-all passing). Python 3.9 — no match statements, no `X | Y` type syntax.
+`src/` scrapes the Artemis.bm catastrophe bond deal directory (1,311 deals,
+Dec 1996 – Aug 2026) into structured tables. The eventual goal is analysing
+capital flows into and out of cat bond funds.
 
----
+**Do not make network requests.** `fetch()` is cache-first and `raw/` holds 39
+cached deal pages plus one dashboard page. Artemis restricts AI use of its
+content, so work only from what is already cached. (A previous reviewer stated
+it made no network requests, yet a file appeared in `raw/` during its run. If
+you fetch anything, say so explicitly.)
 
-## Round 1 outcome — do NOT re-report these
+Run tests with `./.venv/bin/python tests/test_golden.py` — 288 checks over 17
+pages, currently all passing. Python 3.9: no match statements, no `X | Y` types.
+~3,000 lines across `src/` and `tests/`.
 
-Round 1 found 8 wrong outputs behind 153 passing tests. All were reproduced;
-all are now fixed or explicitly flagged:
+## Architecture in one paragraph
 
-- year-rule off-by-one (`< year - 1`) admitting a predecessor's coupon
-- `CLASS_RE` case-sensitivity (lowercase "class A" dropped) and stopword
-  over-match ("class of" → a tranche named `Class OF`)
-- tranche windows snapping to sentence rather than clause
-- a guidance range's low end returned as the settled spread
-- same-year sibling contamination
-- stated-multi deals given single-tranche economics
-- dollar-only tranche-size grammar
-- deal-level `size_history` recording a component's size
-
-Also since fixed: Triangle/Radnor label-to-amount misattribution, Hoplon's
-"€25m each" shared subject, ResRe 2020 Class 13 (suppressed because it equals
-the deal total, which is correct there since Class 12 was never issued), and
-sentence segmentation.
-
-Validation is down to 3 VIOLATIONs, all the same shape: ResRe 2010, Trinity Re
-and Mosaic Re II state a tranche count but never describe the tranches. One row
-plus `tranche_count_understated` is intentional — the data is not on the page
-and fabricating rows would invent it.
+Two tiers. **Tier 1** is the page's "At a glance" list — read structurally,
+confidence `high`, holds final terms. **Tier 2** is the "Full details" prose
+plus appended `Update N:` blocks — regex-mined, confidence `medium`/`low`,
+holds launch-time terms. Tier 2 never writes into a Tier-1 field; Tier 1
+*constrains* Tier 2 (single tranche: size comes from Tier 1; multi-tranche: no
+tranche may equal the deal total). Risk metrics are tranche-level. Every field
+is a record: `{value, confidence, method, evidence, flags}`. `src/validate.py`
+runs cross-field invariants afterwards. `data/queue.csv` orders a future crawl
+family-by-family, chronologically ascending, because prose cites predecessor
+deals.
 
 ---
 
-## Priority: the code written to fix round 1 has never been reviewed
+## Already found — do NOT re-report
 
-Assume the fixes introduced new defects. Concentrate here.
+**Round 1:** year-rule off-by-one; `CLASS_RE` case-sensitivity and stopword
+over-match; windows snapping to sentence not clause; a guidance range's low end
+returned as settled spread; same-year sibling contamination; stated-multi deals
+given single-tranche economics; dollar-only size grammar; `size_history`
+recording a component's size.
 
-**A. The label→amount binding map** (`_bindings_by_label`, `_bound_to_other_label`,
-the fallback in `_size_multi`). Amounts are matched to class labels across the
-WHOLE prose, then used to veto candidates inside a window and to supply sizes
-when a window yields none. Failure modes to hunt: an amount legitimately shared
-by two labels; the same amount appearing for different tranches; a label
-mentioned in a comparative clause capturing an amount; binding beating a more
-specific in-window value; `Class 1` vs `Class 1A` collisions.
+**Round 2:** cancelled deals reporting issued principal; a deductible becoming
+a launch size with a +400% phantom upsize; negated language ("did not change in
+size") accepted as resize corroboration; cancellation detected from a
+tranche-scoped sentence.
 
-**B. Shared-subject "each" distribution.** One amount is copied to every class
-named in a sentence containing "each". Where does that over-distribute — e.g. a
-sentence naming three classes where "each" applies to only two, or "each year"
-/ "each event" rather than each tranche?
+**Known open, already diagnosed — confirm, refute, or fix, but do not merely
+restate:**
 
-**C. The sentence segmenter** (`sentences`, `_sentence_spans`). U.S./U.K./D.C.
-never terminate; company suffixes (Ltd/Inc/Co/Corp/plc/No/St/Mr/Ms/Dr) split
-only before an uppercase next character. Find text where that is wrong in
-either direction. Note the span cache is keyed on full text — check it cannot
-return stale or wrong spans.
-
-**D. Deal-scope discriminators for `size_history`** (`CLASS_SCOPED_RE`,
-`AGGREGATE_RE`). A sentence naming any `Class X` is rejected as a deal state,
-and enumerated amounts without an aggregate word are rejected. Where does that
-discard a genuine deal state, or admit a tranche one?
-
-**E. `equals_deal_total_accepted`.** When the only tranche-size candidate equals
-the Tier-1 total it is now accepted rather than dropped. Justified for ResRe
-2020; where is it wrong?
-
-**F. `tranche_not_issued`.** Detected by `"<label> ... will not be issued"`
-within 120 chars. Check the window and the negation handling.
-
----
-
-## Also worth checking
-
-**G. Invariants** (`src/validate.py`). Cross-source vs the index, parts-vs-whole
-at launch and final, `EL <= attachment`, `exhaustion <= EL <= attachment`,
-maturity after issue, completeness of labelled tranches, stated tranche count.
-What must hold in this data that is not checked? Two rules were deliberately
-REJECTED as not invariant and I want that judgement challenged: `spread > EL`
-(collateral yield) and "no deal-level state may equal a tranche size"
-(Kilimanjaro launched at $300m and its Class D settled at $300m).
-
-**H. Test quality.** 284 checks over 17 pages, including a `REJECT` table of
-known-wrong values and unit tests for `_is_backward_reference` and `sentences`.
-Which of the fixes above could I break without a test failing? Are any guards
-vacuous — passing when extraction returns nothing, or restating the
-implementation rather than the source text?
-
-**I. Regex hygiene.** `_M` ends with `\s*`, which has already caused one regex
-to silently never match (a following `\s+` could not fire). Look for the same
-class of bug elsewhere. Numeric grammars such as `[\d.]+` admit malformed values
-like `...%`.
+1. Seaside 2026-61 yields a false `Class 3` (a Bermuda regulatory class, not a
+   tranche) — and it is in the golden `TRANCHE_SUM_OK` set, so the invented
+   structure is positively validated by the suite.
+2. Multi-amount rejection discards genuine deal states: ResRe 2010's
+   "preliminary size of $375m … final amount issued was $405m" yields nothing.
+3. `validate()` is not called by any tracked output path, so
+   `data/validation.csv` is not reproducible from the tracked pipeline.
+4. `attachment < exhaustion` in `validate.py` reads `exhaustion_point`, a field
+   no parser path creates. Dead code.
+5. Stated tranche count takes the first match: ResRe 2026 says "two tranches"
+   (a subgroup) before "three tranches" (the total).
+6. The binding fallback in `_size_multi` bypasses the deal-total constraint,
+   producing contradictory flags (`deal_total_excluded=4;size_from_label_binding`).
+7. Segmentation splits "This Finca Re Ltd. Series 2022-1" before "Series".
+8. ResRe 2010 / Trinity / Mosaic state a tranche count but never describe the
+   tranches. One row plus `tranche_count_understated` is intentional — the data
+   is not on the page and fabricating rows would invent it.
 
 ---
 
-## Part 2: challenge the design, not just the defects
+## Priority A: the round-2 fixes, which nobody has reviewed
 
-Everything above asks "is this correct?". This part asks "is this the right
-approach at all?" — including decisions that predate the bugs and that nobody
-has questioned. Propose things I did not think of. Ignore the boundaries of the
-existing code.
+- **`deal_status` / terminal status.** `TERMINAL_STATUS`, `CANCELLED_RE`, and
+  the early return in `_size_single`. Cancellation is recognised only in
+  sentences naming no class. Where does that miss a real cancellation, or fire
+  on a deal that did issue? What about partial issuance, or a deal cancelled
+  and later re-launched?
+- **`_governed_by_loss_level`.** A ±45-character window around an amount vetoes
+  it if a loss-level noun appears. Find a genuine size killed by this, or a
+  deductible that still slips through.
+- **`NEGATED_RESIZE_RE`.** Find negation forms it misses, and any place it
+  wrongly suppresses a real resize.
 
-Load-bearing decisions, all open to challenge:
+## Priority B: code no reviewer has looked at
 
-1. **Regex extraction over prose.** Every Tier-2 value comes from anchored
-   regexes with a confidence grade. Is there a better instrument — a real
-   grammar, a dependency parse, an LLM extraction pass with the invariants as
-   the check, something else? What would it cost, and where would it be worse?
-2. **The two-tier model** (structured summary = final terms; prose = launch-time
-   terms, with Tier 1 constraining Tier 2). Sound abstraction, or is it
-   smuggling an assumption that will break on pages neither of us has seen?
-3. **Windows as the unit of tranche scope.** Prose is sliced per class label and
-   values mined inside each slice. The binding map already works around this.
-   Is windowing the wrong primitive — should extraction be
-   entity-first (find tranches, then attach values) rather than span-first?
-4. **The per-field record** `{value, confidence, method, evidence, flags}` and a
-   3-level confidence rubric graded by extraction method. Right granularity?
-   Should confidence be numeric, or per-invariant rather than per-field?
-5. **Validation as a separate post-hoc pass** rather than inline constraints
-   that steer extraction. Would constraint-first extraction (choose the
-   candidate set that satisfies parts-vs-whole) be better than extract-then-check?
-6. **Flat CSVs** (`deals` + `tranches` + a long-format review sheet). Right
-   shape for fund-flow analysis, or should this be normalised differently —
-   an events table, a bitemporal record of what was known when?
-7. **Golden tests over 17 cached fixtures.** Would property-based testing,
-   differential testing, or generated cases catch more than hand-picked pages?
-8. **Crawl design** — family-grouped ascending, 2s delay, cache-first, with a
-   sibling registry built as it goes. Better ordering or architecture?
+`src/parse_index.py`, `src/fetch.py`, `src/build_queue.py`,
+`src/build_review_bundle.py`, `src/sibling_registry.py`.
 
-Also: **what would you do differently if you started this from scratch today,
-knowing the corpus?** And **what is missing entirely** — a capability, a check,
-an output that this project should have and does not?
+Specifically: the **family-merging** logic in `build_queue.py` strips roman
+numerals and embedded years so "Windmill I/II/III Re" group together. Where does
+that merge unrelated programmes or split related ones? Correct crawl order is a
+*correctness* requirement here, not tidiness — the sibling registry depends on
+it — so an error there corrupts everything downstream. Also: is the cache key in
+`fetch.py` sound, and is `index.csv` parsed correctly against `raw/`?
 
-**Be honest about the null result.** If a decision is already the right one,
-say so in a line and move on. Do not invent improvements to look useful, and do
-not propose a rewrite whose benefit you cannot name concretely. "I could not
-beat the current approach on X, because Y" is a genuinely useful answer and I
-would rather have it than a plausible-sounding alternative. Where you do propose
-a change, state what it costs, what it breaks, and how I would know it worked.
+## Priority C: the ten newest pages, barely tested
+
+Recently cached and deliberately chosen to stress untested dimensions. Only
+three have been examined:
+
+```
+Baltic PCC 2025-1      GBP, Pool Re terrorism, PCC vehicle
+Crystal Credit         "EUR 252m" — currency as a WORD, 2006
+Queen Street X Re      Not issued
+Everglades Re 2014-1   $1.5bn
+Merna Reinsurance      $1.18bn, 2007          [Class A has no size]
+IBRD CAR 111-112       pandemic, range in the name  [Class A has no size]
+Beazley (Cairney)      cyber, parenthetical name
+Operational Re         operational risk  [3/3 classes have no size; count 2 vs 3]
+Lion I Re              €190m ($262m), no series token in the name
+Eclipse Re 2021-01A    nine same-family same-year siblings
+```
+
+Operational Re is probably the most informative page in the corpus right now.
+
+## Priority D: tests
+
+Round 2 judged several guards vacuous: `REJECT` passes under total extraction
+failure; `tranche_not_issued` can be deleted with the suite still green; nothing
+asserts how many checks ran, so conditional guards can vanish along with the
+data they depend on; validator tests only check severity spelling and always
+pass `index_row=None`, so cross-source checks never run.
+
+Which of the fixes above could I break without a test failing? Mutation-test if
+that is the fastest way to find out.
+
+---
+
+## Part 2: challenge the design
+
+Round 2 proposed typed lifecycle events (target / range / revised / priced /
+issued / cancelled), entity-first tranche resolution instead of span windows,
+and a two-pass crawl so output stops depending on parse order. It judged these
+already correct: cache-first retrieval, Tier 1 as stronger evidence, honest
+`None` over a plausible fallback, separate deal/tranche projections,
+independent post-hoc validation, categorical rather than numeric confidence,
+golden fixtures, and rejecting both `spread > EL` and "no deal state may equal a
+tranche size" as invariants.
+
+**Do you agree?** Say where you would diverge, and what those proposals miss.
+
+Then the larger question. Round 2 concluded that **issuance data is not
+fund-flow data** — Artemis measures primary-market supply, not subscriptions,
+redemptions, AUM changes or performance — so this source alone cannot answer the
+project's stated question. Assume that is right. **Given only this corpus, what
+is the strongest defensible analysis?** What would you build, what second
+dataset would you join, and what claims would remain unsupportable?
+
+**Be honest about null results.** "I could not beat the current approach on X,
+because Y" is a genuinely useful answer. Do not invent improvements to look
+useful, and do not propose a rewrite whose benefit you cannot name.
 
 ---
 
 ## Output
 
-**Part 1 (defects).** For each finding: file:line, what breaks, a concrete
-input from `raw/` that triggers it, severity, and the minimal fix. Rank by
-severity. Prefer 5 real defects with reproductions over 30 speculative notes.
-If a focus area is sound, say so in one line and move on.
+**Part 1 (defects).** For each: file:line, what breaks, a concrete input from
+`raw/` that triggers it, severity, minimal fix. Ranked by severity. Five real
+defects with reproductions beat thirty speculative notes. If a focus area is
+sound, say so in one line.
 
-**Part 2 (design).** Keep it separate from Part 1 so I can act on defects
-without wading through redesigns. For each proposal: what it replaces, the
-concrete benefit, the cost, what it breaks, and how I would verify it helped.
-List the decisions you examined and judged already correct — that list is as
-valuable to me as the proposals.
+**Part 2 (design).** Kept separate. For each proposal: what it replaces, the
+concrete benefit, the cost, what it breaks, how I would verify it helped. List
+what you examined and judged already correct — that list is as valuable as the
+proposals.
