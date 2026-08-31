@@ -34,5 +34,11 @@ notebook/
 raw/
 data/raw/
 data/*.csv
+
+# Worktrees share the cache and venv by symlink; "raw/" and ".venv/" with a
+# trailing slash match directories only, so the symlink forms were tracked.
+/raw
+/.venv
+/data/raw
 plots/*.png
 plots/*.svg
