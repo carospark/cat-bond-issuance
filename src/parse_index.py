@@ -11,9 +11,9 @@ import pandas as pd
 from bs4 import BeautifulSoup
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fetch import fetch
+from fetch import fetch, DEAL_DIRECTORY_URL
 
-URL = "https://www.artemis.bm/deal-directory/"
+URL = DEAL_DIRECTORY_URL
 OUT = Path(__file__).resolve().parent.parent / "data" / "index.csv"
 
 COLUMNS = ["issuer_name", "deal_url", "sponsor", "size_text", "date_text"]

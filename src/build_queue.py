@@ -54,7 +54,9 @@ def family_root(name):
     n = re.sub(r"\b(?:19|20)\d\d\b", " ", n)
     # Stripping the year from "Radnor Re 2020-2" leaves "Radnor Re -2"; the
     # orphaned series suffix then split 27 families across 65 deals.
-    n = re.sub(r"[-\u2013]\s*\d+[A-Za-z]?\b", " ", n)
+    # Only an ORPHANED suffix (preceded by the space the year strip left):
+    # "IBRD CAR 111-112" must keep its 112.
+    n = re.sub(r"(?<=\s)[-\u2013]\s*\d+[A-Za-z]?\b", " ", n)
     return re.sub(r"\s+", " ", n).strip(" ,-\u2013")
 
 MONTHS = {m: i for i, m in enumerate(
@@ -88,20 +90,31 @@ def main():
     df["family_seq"] = df.groupby("family").cumcount() + 1
     df["family_size"] = df.groupby("family")["family"].transform("size")
 
+    # A "family" of transformer cells (Seaside Re x69, Eclipse Re x59, Artex,
+    # Dodeka ...) shares a vehicle, not a sponsor or a programme. Its prose
+    # never cites an earlier cell, so it is not a sibling family for the
+    # registry: no sibling sizes are recorded for it.
+    unknown_share = (df.sponsor.str.strip().str.lower() == "unknown").groupby(df.family).transform("mean")
+    df["family_kind"] = "programme"
+    df.loc[(df.family_size >= 5) & (unknown_share >= 0.5), "family_kind"] = "platform"
+
     # Sizes of earlier siblings: the figures most likely to contaminate.
     sib = []
     for fam, grp in df.groupby("family", sort=False):
         seen = []
         for _, r in grp.iterrows():
-            sib.append((r.deal_url, "|".join(seen)))
+            sib.append((r.deal_url, "" if r.family_kind == "platform" else "|".join(seen)))
             seen.append(r.size_text)
     sib = dict(sib)
     df["sibling_sizes"] = df.deal_url.map(sib)
 
-    cols = ["family", "family_seq", "family_size", "issuer_name", "sponsor",
+    cols = ["family", "family_kind", "family_seq", "family_size", "issuer_name", "sponsor",
             "size_text", "date_text", "year", "decade", "deal_url", "sibling_sizes"]
     df[cols].to_csv(ROOT / "data" / "queue.csv", index=False, encoding="utf-8")
     print("wrote data/queue.csv  %d rows" % len(df))
+    print("platform families: %d (%d deals)" % (
+        df[df.family_kind == "platform"].family.nunique(),
+        (df.family_kind == "platform").sum()))
     print("\nfirst 8 of the queue (oldest families first):")
     print(df[["family", "family_seq", "issuer_name", "date_text"]]
           .head(8).to_string(index=False))

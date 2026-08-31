@@ -25,9 +25,9 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
-from parse_deal import _money_to_number, _currency, sentences   # noqa: E402
-
-WORD_COUNT = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
+from parse_deal import (_money_to_number, _currency, sentences,   # noqa: E402
+                        _series_tokens, STATED_COUNT_RE, COUNT_WORDS,
+                        check_tranche_sum)
 
 
 def _pct(v):
@@ -70,8 +70,13 @@ def validate(rec, tranches, index_row=None):
                 "detail=%r index=%r" % (det_sp[:40], index_row.sponsor[:40]))
 
     # --- 2. parts vs whole --------------------------------------------------
-    for label, key in (("final", "tranche_size_final"),
-                       ("launch", "tranche_size_at_launch")):
+    # FINAL uses the parser's own check_tranche_sum, which knows the headline's
+    # basis (Merna: notes + term loans). A second implementation here said
+    # VIOLATION while the bundle said OK -- one derivation, not two.
+    ok, detail = check_tranche_sum(rec, tranches)
+    if ok is False:
+        add("VIOLATION", "tranche_sum_final", detail)
+    for label, key in (("launch", "tranche_size_at_launch"),):
         sizes = [t.get(key) for t in tranches]
         if tranches and all(sizes) and len({_currency(s) for s in sizes}) == 1:
             whole = (rec["size"]["value"] if label == "final" else
@@ -118,8 +123,7 @@ def validate(rec, tranches, index_row=None):
     # that a same-year sibling defeats the year heuristic entirely, which is
     # why the sibling registry exists.
     for sent in sentences(prose):
-        m = re.search(r"(?<![\d-])\b(one|two|three|four|five|six|\d{1,2})\s+tranches\b",
-                      sent, re.I)
+        m = STATED_COUNT_RE.search(sent)   # the parser's grammar, not a copy
         if not (m and tranches):
             continue
         # Skip only if the sentence names a series OTHER than this deal's.
@@ -127,15 +131,14 @@ def validate(rec, tranches, index_row=None):
         # "the two tranches from the Gateway Re 2024-1 deal" is not. A bare
         # 20\d\d-\d test cannot tell them apart, and filtering on it lost a
         # real 5-vs-3 undercount on Radnor.
-        own = set(re.findall(r"\b(20\d\d-\d+)\b",
-                             (index_row.issuer_name if index_row is not None else "")
-                             + " " + (rec["deal_name"]["value"] or "")))
-        cited = set(re.findall(r"\b(20\d\d-\d+)\b", sent))
+        own = _series_tokens((index_row.issuer_name if index_row is not None else "")
+                             + " " + (rec["deal_name"]["value"] or ""))
+        cited = _series_tokens(sent)
         if (cited - own) or re.search(r"\bfrom the\b|\bprevious\b|\bprior\b",
                                       sent, re.I):
             continue  # describes another deal
         tok = m.group(1).lower()
-        stated = int(tok) if tok.isdigit() else WORD_COUNT.get(tok)
+        stated = int(tok) if tok.isdigit() else COUNT_WORDS.get(tok)
         if stated and stated != len(tranches):
             sev = "VIOLATION" if stated > len(tranches) else "WARN"
             add(sev, "tranche_count_matches_prose",

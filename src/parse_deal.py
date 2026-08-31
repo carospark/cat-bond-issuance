@@ -55,6 +55,9 @@ MONTHS = (r"(?:January|February|March|April|August|September|October|November|"
           r"December|June|July|Sept|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|"
           r"Nov|Dec)")
 
+# A settled-price anchor must not accept the first endpoint of a range.
+NOT_RANGE = r"(?!\s*(?:to|and|[-\u2013])\s*[\d.]+\s*%)"
+
 # name -> (pattern, strength). "strong" patterns carry an explicit anchor
 # phrase; "weak" ones are fallbacks and are always downgraded to low.
 TIER2_PATTERNS = {
@@ -63,14 +66,17 @@ TIER2_PATTERNS = {
         (r"expected loss[^.%]{0,30}?([\d.]+\s*%)", "weak"),
     ],
     "attachment_probability": [
-        (r"attachment probability of (?:approximately |around )?([\d.]+\s*%)", "strong"),
+        (r"attachment probability (?:for the notes )?(?:of|is|at|to be) "
+         r"(?:approximately |around |about |said to be )?([\d.]+\s*%)", "strong"),
+        # Artemis sometimes writes "attachment point of 2.47%" for the
+        # probability (Finca). A percentage is never a monetary point.
+        (r"attachment point (?:at|of) ([\d.]+\s*%)", "weak"),
     ],
     "exhaustion_probability": [
         (r"exhaustion probability of (?:approximately |around )?([\d.]+\s*%)", "strong"),
     ],
     "attachment_point": [
         (r"attach(?:es|ment)?(?: point)? (?:at|of) ([$\u20ac\u00a3][\d,.]+\s*(?:million|billion|m|bn)?)", "strong"),
-        (r"attach(?:es|ment)?(?: point)? (?:at|of) ([\d.]+\s*%)", "strong"),
     ],
     # Only settled-price anchors live here. The old weak fallback
     # `(?:spread|coupon)[^.%]{0,40}?([\d.]+%)` grabbed whichever percentage sat
@@ -78,8 +84,11 @@ TIER2_PATTERNS = {
     # deleted rather than repaired: an honest None beats a plausible wrong
     # number. Guidance ranges belong in price_guidance / spread_history.
     "spread_risk_margin": [
-        (r"(?:pricing|spread)[^.%]{0,60}?settled[^.%]{0,40}?at ([\d.]+\s*%)", "strong"),
-        (r"priced to pay (?:investors )?an? (?:initial )?risk (?:margin|interest spread) of ([\d.]+\s*%)", "strong"),
+        (r"(?:pricing|spread)[^.%]{0,60}?settled[^.%]{0,60}?at ([\d.]+\s*%)", "strong"),
+        (r"priced to pay (?:investors )?an? (?:initial )?risk (?:margin|interest spread) of ([\d.]+\s*%)" + NOT_RANGE + r"", "strong"),
+        # "settled to offer investors a yield of 2.25%" (Lion I)
+        (r"(?:settled|priced|closed) to (?:offer|pay) (?:investors )?an? (?:initial )?"
+         r"(?:yield|coupon|spread|risk margin) of ([\d.]+\s*%)" + NOT_RANGE + r"", "strong"),
         (r"final(?:ised|ized)? (?:pricing|spread|risk margin)[^.%]{0,30}?([\d.]+\s*%)", "strong"),
         # Settlement language first. "guide pricing of 11.25% to 12.25%" used to
         # match the generic form and return the range's LOWER BOUND as if it
@@ -87,9 +96,11 @@ TIER2_PATTERNS = {
         (r"(?:pricing|spread)[^.%]{0,60}?settled[^.%]{0,40}?at ([\d.]+\s*%)", "strong"),
         (r"(?:pricing|spread)[^.%]{0,60}?fixed at ([\d.]+\s*%)", "strong"),
         (r"(?:priced|pricing) (?:at|of) ([\d.]+\s*%)(?!\s*(?:to|and|[-\u2013])\s*[\d.]+\s*%)", "strong"),
-        (r"(?:initial )?risk (?:margin|interest spread) of ([\d.]+\s*%)", "strong"),
-        (r"priced to pay (?:investors )?a spread of ([\d.]+\s*%)", "strong"),
-        (r"coupon of ([\d.]+\s*%)", "strong"),
+        # Every settled-price anchor rejects a range endpoint. "coupon of
+        # 2.25% to 2.5%" returned 2.25% -- right on Lion I by luck only.
+        (r"(?:initial )?risk (?:margin|interest spread) of ([\d.]+\s*%)" + NOT_RANGE + r"", "strong"),
+        (r"priced to pay (?:investors )?a spread of ([\d.]+\s*%)" + NOT_RANGE + r"", "strong"),
+        (r"coupon of ([\d.]+\s*%)" + NOT_RANGE + r"", "strong"),
     ],
     "price_guidance": [
         (r"guidance[^.]{0,80}?([\d.]+\s*%\s*(?:to|and|[-–])\s*[\d.]+\s*%)", "strong"),
@@ -147,8 +158,12 @@ CLASS_SCOPED_RE = re.compile(r"\bClass\s+[A-Z0-9]", re.IGNORECASE)
 # that sentence also says "notes" and "protection".
 LOSS_LEVEL_RE = re.compile(
     r"deductible|attachment|attaches|exhaust|franchise|retention|"
-    r"limit per|per[- ]event limit|trigger point|\blayer\b|term loan",
+    r"limit per|per[- ]event limit|trigger point|term loan",
     re.IGNORECASE)
+# "a $2.5 billion layer" / "this higher layer being $100m" are layer widths,
+# not sizes. Checked in a TIGHT window: a +-45 test on "layer" vetoed Citrus's
+# genuine "$50m of notes, but this higher layer ..." sentence.
+LAYER_RE = re.compile(r"\b(?:layer|tower)\b", re.IGNORECASE)
 
 # "did not change in size" matched RESIZE_RE (change, size) and was accepted as
 # evidence FOR a resize. Negation must be checked before corroboration.
@@ -161,7 +176,10 @@ NEGATED_RESIZE_RE = re.compile(
 
 def _governed_by_loss_level(text, start, end):
     """True if a loss-level noun sits immediately around this amount."""
-    return bool(LOSS_LEVEL_RE.search(text[max(0, start - 45):end + 45]))
+    if LOSS_LEVEL_RE.search(text[max(0, start - 45):end + 45]):
+        return True
+    return bool(LAYER_RE.search(text[end:end + 12])
+                or LAYER_RE.search(text[max(0, start - 25):start]))
 AGGREGATE_RE = re.compile(r"\btotal|combined|aggregate|altogether|in all\b",
                           re.IGNORECASE)
 
@@ -182,6 +200,11 @@ CANCELLED_RE = re.compile(
     r"was withdrawn|did not (?:proceed|complete)|was not completed|"
     r"not to proceed|will not (?:be issued|proceed))\b", re.IGNORECASE)
 
+PRIVATE_RE = re.compile(
+    r"\bprivate(?:ly)?[- ](?:placed|placement|cat(?:astrophe)? bond|ILS|offering|"
+    r"deal|transaction|issuance)|\bSection 4\(2\)|\bunregistered private|"
+    r"\bsegregated account|\btransformer\b", re.IGNORECASE)
+
 # core fields are expected on essentially every deal, so a low fill rate is a
 # bug. opportunistic fields are published only on a minority (mostly World Bank
 # and public-entity issues); 0/8 there is not a defect and should not be
@@ -196,8 +219,27 @@ FIELD_TIER = {
 WORD_NUM = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
             "seven": 7, "eight": 8, "nine": 9, "ten": 10, "twelve": 12}
 
-MONEY_RE = re.compile(r"[$€£¥]\s?[\d,]+(?:\.\d+)?\s*(?:million|billion|bn|m\b|b\b)?", re.I)
+# ONE money grammar. Symbols, prefixed symbols (C$, NZ$, US$) and ISO codes as
+# words: Operational Re is written entirely in "CHF105m", Crystal Credit in
+# "EUR 252 million", and "C$115m" used to read as USD. Every other money regex
+# in the package is built from CCY / MONEY_RE so they cannot drift apart.
+CCY = (r"(?<![A-Za-z])(?:C\$|NZ\$|A\$|US\$|HK\$|S\$|[$\u20ac\u00a3\u00a5]|"
+       r"EUR|USD|GBP|CHF|JPY|AUD|CAD|NZD)")
+MONEY_RE = re.compile(CCY + r"\s?[\d,]+(?:\.\d+)?\s*(?:million|billion|bn|m\b|b\b)?", re.I)
 MULTIPLIER = {"m": 1e6, "million": 1e6, "bn": 1e9, "b": 1e9, "billion": 1e9}
+CCY_CODE = {"$": "USD", "US$": "USD", "USD": "USD", "\u20ac": "EUR", "EUR": "EUR",
+            "\u00a3": "GBP", "GBP": "GBP", "\u00a5": "JPY", "JPY": "JPY",
+            "CHF": "CHF", "C$": "CAD", "CAD": "CAD", "NZ$": "NZD", "NZD": "NZD",
+            "A$": "AUD", "AUD": "AUD", "HK$": "HKD", "S$": "SGD"}
+# "(approx $687m)", "(EUR 80m)", "(US$222 million)": a conversion of the amount
+# just before it, never a second amount. Stripped before amounts are counted.
+PAREN_CONVERSION_RE = re.compile(
+    r"\((?:approx\.?|around|about|roughly|circa|c\.|~|US|or)?\s*" + CCY +
+    r"\s?[\d,.]+\s*(?:million|billion|bn|m|b)?[^()]{0,20}\)", re.I)
+# ISO 4217 code of the state's headline currency, used to pick the right
+# amount when a sentence quotes both a native figure and its conversion.
+TRANCHE_ONLY = {"expected_loss", "attachment_probability", "exhaustion_probability",
+                "spread_risk_margin", "conditional_severity"}
 
 
 def _clean(t):
@@ -232,9 +274,9 @@ def _normalise_placeholder(value):
 
 
 def _currency(text):
-    """Leading currency symbol of a money string, or None."""
-    m = re.search(r"[$\u20ac\u00a3\u00a5]", text or "")
-    return m.group(0) if m else None
+    """ISO code of the first currency token in a money string, or None."""
+    m = re.search(CCY, text or "", re.I)
+    return CCY_CODE.get(m.group(0).upper(), m.group(0).upper()) if m else None
 
 
 def _term_to_years(text):
@@ -255,18 +297,36 @@ def _add_years(month_year, years):
     return f"{m.group(0).split()[0]} {int(m.group(1)) + years}"
 
 
+UPDATE_HEAD_RE = re.compile(
+    r"(\bUpdate\s*\d*\s*(?:\([^)]{0,40}\)|,[^:\n]{0,30})?\s*:)", re.IGNORECASE)
+UPDATE_DATE_RE = re.compile(
+    MONTHS + r"\.?\s+(?:\d{1,2}(?:st|nd|rd|th)?,?\s+)?\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+"
+    + MONTHS + r"\.?\s+\d{4}", re.IGNORECASE)
+
+
+def _segment_prose_dated(prose):
+    """([(label, text)], {label: date_text}) -- launch, then each Update block.
+
+    Artemis writes "Update:", "Update 2:", "Update 2 (May 4th 2016):" and
+    "Update, May 2018:". Labels are POSITIONAL ordinals (update_1, update_2 ..)
+    so they sort and never collide; the heading's date, when it carries one,
+    is returned separately rather than mangled into the label.
+    """
+    parts = UPDATE_HEAD_RE.split(prose)
+    segments, dates = [("launch", parts[0])], {}
+    for i in range(1, len(parts) - 1, 2):
+        head = _clean(parts[i]).rstrip(":")
+        label = "update_%d" % len(segments)
+        m_d = UPDATE_DATE_RE.search(head)
+        dates[label] = _clean(m_d.group(0)) if m_d else None
+        segments.append((label, parts[i + 1]))
+    keep = [(label, text) for label, text in segments if _clean(text)]
+    return keep, {k: v for k, v in dates.items() if k in dict(keep)}
+
+
 def _segment_prose(prose):
     """Split narrative into ordered states: launch, then each Update block."""
-    # Artemis writes "Update:", "Update 2:", "Update 2 (May 4th 2016):" and
-    # "Update, May 2018:". Matching only the bare forms glued four of
-    # Operational Re's updates into one state.
-    parts = re.split(r"(Update\s*\d*\s*(?:\([^)]{0,40}\)|,[^:\n]{0,30})?\s*:)",
-                     prose, flags=re.IGNORECASE)
-    segments = [("launch", parts[0])]
-    for i in range(1, len(parts) - 1, 2):
-        segments.append((_clean(parts[i]).rstrip(":").lower().replace(" ", "_"),
-                         parts[i + 1]))
-    return [(label, text) for label, text in segments if _clean(text)]
+    return _segment_prose_dated(prose)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -475,7 +535,15 @@ def parse_deal(html, deal_url=None):
         record[name] = (_apply_patterns(name, patterns, prose, issue_year, own_series)
                         if prose else _field())
 
-    segments = _segment_prose(prose) if prose else []
+    segments, segment_dates = (_segment_prose_dated(prose) if prose else ([], {}))
+    # Guidance, attachment point and the spread series are TRANCHE facts. On a
+    # multi-tranche page the deal-level column silently held tranche 1's value
+    # (IBRD 111-112: guidance = Class B's 12.25-13%, spread = Class A's 6.9%).
+    n_windows = len(_tranche_windows(prose)) if prose else 0
+    if n_windows > 1:
+        for name in ("price_guidance", "attachment_point"):
+            record[name] = _field(flags=["not_found", "tranche_level_only:n=%d" % n_windows])
+    headline_ccy = _currency(record["size"]["value"] or "")
 
     # ---- Time series: how terms moved while marketing --------------------
     size_history, skipped_backref = [], 0
@@ -489,18 +557,63 @@ def parse_deal(html, deal_url=None):
                 continue  # money here is not a deal size
             if CLASS_SCOPED_RE.search(sentence):
                 continue  # a tranche's size, not the deal's
-            m_first = MONEY_RE.search(sentence)
-            if m_first and _governed_by_loss_level(sentence, m_first.start(),
+            # "$90 million (EUR 80m)": one amount and its conversion. Count
+            # the native figure only, but prefer whichever currency the
+            # Tier-1 headline uses so launch and final are comparable.
+            conversions = [_clean(x.group(0)) for x in PAREN_CONVERSION_RE.finditer(sentence)]
+            main = PAREN_CONVERSION_RE.sub(" ", sentence)
+            m_first = MONEY_RE.search(main)
+            if m_first and _governed_by_loss_level(main, m_first.start(),
                                                    m_first.end()):
                 continue  # a deductible/attachment level, not a size
-            amounts = [x for x in MONEY_RE.findall(sentence)
+            amounts = [x for x in MONEY_RE.findall(main)
                        if (_money_to_number(x) or 0) >= 1e6]
-            if len(amounts) > 1 and not AGGREGATE_RE.search(sentence):
-                continue  # components enumerated with no stated total
-            m = MONEY_RE.search(sentence)
-            if m and (_money_to_number(_clean(m.group(0))) or 0) >= 1e6:
-                size_history.append({"state": label, "value": _clean(m.group(0))})
-                break
+            kind = "stated"
+            m_rng = SIZE_RANGE_RE.search(main)
+            low = _amount_group(m_rng) if m_rng else None
+            g = next((i for i in range(1, m_rng.re.groups + 1) if m_rng.group(i)), 1) if m_rng else 1
+            if (low and (_money_to_number(low) or 0) >= 1e6
+                    and not _governed_by_loss_level(main, m_rng.start(g), m_rng.end(g))):
+                m, kind = m_rng, "range_low"      # low end is the launch figure
+                value = _clean(low)
+            else:
+                if len(amounts) > 1 and not AGGREGATE_RE.search(main):
+                    continue  # components enumerated with no stated total
+                m = MONEY_RE.search(main)
+                if not (m and (_money_to_number(_clean(m.group(0))) or 0) >= 1e6):
+                    continue
+                value = _clean(m.group(0))
+                if re.search(r"up to\s*$", main[max(0, m.start() - 8):m.start()], re.I):
+                    kind = "cap"
+            if conversions and headline_ccy and _currency(value) != headline_ccy:
+                alt = next((MONEY_RE.search(c).group(0) for c in conversions
+                            if _currency(c) == headline_ccy), None)
+                if alt:
+                    value, kind = _clean(alt), kind + ":converted"
+            size_history.append({"state": label, "value": value, "kind": kind})
+            break
+    # Capital raised beside the notes. Merna's Tier-1 "$1.18bn" is $1,058.6m of
+    # notes PLUS $122m of term loans; IBRD 111-112 sold $105m of swaps beside
+    # $320m of notes. The headline is not always note principal, and
+    # parts-vs-whole must know which instruments it is summing.
+    other = []
+    for sentence in sentences(prose) if prose else []:
+        if _is_backward_reference(sentence, issue_year, own_series):
+            continue
+        for m_o in MONEY_RE.finditer(sentence):
+            after = sentence[m_o.end():m_o.end() + 40]
+            # "$94 million tranche A term loan", "$105 million of pandemic
+            # linked catastrophe swaps" -- but NOT "$155 million Three tranches
+            # of term loan notes were also issued", which is Class C's size.
+            m_k = re.match(r"\s*(?:tranche\s+[A-Z]\s+)?(?:of\s+)?"
+                           r"(?:(?!tranches|classes|notes)[\w-]+\s+){0,3}?(term loans?|swaps?)\b", after, re.I)
+            if m_k and (_money_to_number(m_o.group(0)) or 0) >= 1e6:
+                kind = "term_loan" if "loan" in m_k.group(1).lower() else "swap"
+                other.append({"kind": kind, "value": _clean(m_o.group(0))})
+    record["other_instruments"] = _field(
+        other or None, "low" if other else None, "regex:instrument_noun_after_amount",
+        "%d mention(s)" % len(other) if other else None,
+        ["not_note_principal"] if other else ["not_found"])
     sh_flags = [] if size_history else ["not_found"]
     if skipped_backref:
         sh_flags.append("foreign_deal_reference_excluded=%d_sentence(s)" % skipped_backref)
@@ -513,7 +626,7 @@ def parse_deal(html, deal_url=None):
         for pattern, kind in [
             (r"priced to pay (?:investors )?an? (?:initial )?risk margin of ([\d.]+\s*%)", "priced"),
             (r"guidance[^.]{0,80}?([\d.]+\s*%\s*(?:to|and|[-–])\s*[\d.]+\s*%)", "guidance"),
-            (r"(?:initial )?risk margin of ([\d.]+\s*%)", "risk_margin"),
+            (r"(?:initial )?risk margin of ([\d.]+\s*%)" + NOT_RANGE, "risk_margin"),
         ]:
             m = re.search(pattern, text, re.IGNORECASE)
             if m:
@@ -683,21 +796,33 @@ def parse_deal(html, deal_url=None):
         "tier1_raw+prose", raw_size or None,
         ["terminal_status"] if status else [])
 
+    if status in ("not_issued", "cancelled"):
+        # A deal that never issued has no maturity. Gateway 2024-3 reported
+        # "Jun 2027" derived from a term it never started.
+        for name in ("maturity_date_derived", "maturity_scheduled"):
+            record[name] = _field(flags=["not_found", "no_maturity:%s" % status])
+
+    # "Private" means the page SAYS so. Counting Tier-1 placeholders flagged
+    # Merna (a rated 144A deal with a sparse 2007 summary box) as private and
+    # missed Beazley ("private Section 4(2) cat bond"). The placeholder count
+    # is still reported, as what it is: sparseness.
     placeholder_hits = [k for k in TIER1_KEYS
                         if any(str(x).startswith("source_placeholder")
                                for x in record[k]["flags"])]
+    m_priv = PRIVATE_RE.search(prose) if prose else None
     record["deal_is_private"] = _field(
-        len(placeholder_hits) >= 3 or None,
-        "medium" if len(placeholder_hits) >= 3 else None,
-        "derived:tier1_placeholder_cluster",
-        ",".join(placeholder_hits) or None,
-        ["placeholders=%d" % len(placeholder_hits)] if placeholder_hits else ["not_found"])
+        True if m_priv else None, "medium" if m_priv else None,
+        "keyword:private_placement",
+        _clean(_sentence_at(prose, m_priv.start()))[:160] if m_priv else None,
+        (["tier1_placeholders=%d" % len(placeholder_hits)] if placeholder_hits else [])
+        + ([] if m_priv else ["not_found"]))
 
     record["_meta"] = {
         "page_flags": page_flags,
         "extra_fields": extra_fields,
         "prose_chars": len(prose),
         "prose_states": [s[0] for s in segments],
+        "prose_state_dates": segment_dates,
         "field_tier": FIELD_TIER,
         "full_details_text": prose or None,
     }
@@ -759,23 +884,46 @@ if __name__ == "__main__":
 # veto, which in turn discarded Kilimanjaro's Class E launch size because that
 # sentence carries the size AND the attachment point. Matching the size idiom
 # directly removes the need for the veto.
-_M = r"([$\u20ac\u00a3\u00a5][\d,.]+\s*(?:million|billion|bn|m)?)"
-TRANCHE_SIZE_RES = [re.compile(x, re.IGNORECASE) for x in (
-    # A range states a target span; its LOW end is the launch figure. Matched
-    # first so that "between $25m and $100m in size" does not fall through to
-    # `_M + " in size"`, which returns the HIGH end (IBRD 111-112 Class B).
-    r"between\s+" + _M + r"\s+and\s+[$\u20ac\u00a3\u00a5][\d,.]+",
-    r"size of " + _M,
-    _M + r"\s+in size",
-    r"(?:grew|upsiz\w+|settled|finalis\w+|finaliz\w+|target\w+|offered|priced|sized)"
-    r"\s+(?:to|at|as)\s+(?:up to |between )?" + _M,
-    _M + r"\s+Class\s+[A-Z0-9]+",
-    r"(?:tranche|notes)[^.]{0,20}?of " + _M,
+_M = r"(" + CCY + r"\s?[\d,.]+\s*(?:million|billion|bn|m)?)"
+# "between $25m and $100m", "from $150 million to $200 million", "$150m to
+# $250m of notes": a target SPAN. Its low end is a launch figure; neither end
+# is ever a final. Group 1 = low end.
+# A sizing word must govern the span: Citrus's "protection would run from
+# $200m to $450m of its tower" is a layer, not a target.
+SIZE_RANGE_RE = re.compile(
+    r"(?:target\w*|aim\w*|seek\w*|secur\w*|sized?|set|offer\w*|issu\w*|rais\w*|expect\w*)\s+"
+    r"(?:\w+\s+){0,3}?(?:between|from)\s+" + _M + r"\s+(?:and|to)\s+" + CCY + r"\s?[\d,.]+|"
+    + _M + r"\s+(?:to|[-\u2013])\s+" + CCY + r"\s?[\d,.]+\s*(?:million|billion|bn|m)?"
+    r"\s+(?:of|in)\s+(?:notes|size|cover|reinsurance|protection)\b",
+    re.IGNORECASE)
+
+
+def _amount_group(m):
+    """The amount captured by a match whose pattern has alternatives."""
+    return next((g for g in m.groups() if g), None)
+# (pattern, kind). kind is what the idiom asserts about the amount:
+#   range   a span; low end reported, never a final
+#   priced  a settled figure ("priced to offer $225 million of notes")
+#   stated  any other anchored size idiom
+TRANCHE_SIZE_RES = [(re.compile(x, re.IGNORECASE), k) for x, k in (
+    (SIZE_RANGE_RE.pattern, "range"),
+    (r"priced\s+(?:to\s+offer|offering)\s+" + _M, "priced"),
+    (r"(?:settled|finalis\w+|finaliz\w+|sized|closed)\s+(?:to|at|as)\s+" + _M, "priced"),
+    (r"size of " + _M, "stated"),
+    (_M + r"\s+in size", "stated"),
+    (r"(?:grew|upsiz\w+|target\w+|offered|priced)"
+     r"\s+(?:to|at|as)\s+(?:up to |between )?" + _M, "stated"),
+    # "targeting at least $75 million", "aiming for $150m", "seeking $X"
+    (r"(?:target\w*|aim\w*|seek\w*|sought)\s+(?:for\s+|at\s+least\s+|up\s+to\s+)?" + _M, "stated"),
+    (_M + r"\s+Class\s+[A-Z0-9]+", "stated"),
+    (r"(?:tranche|notes)[^.]{0,40}?of " + _M, "stated"),
     # "$134,574,000 tranche of Class M-1 notes" -- amount precedes the noun.
-    _M + r"\s+tranche of",
-    # "targeted to secure $150 million in reinsurance", "provide $300 million"
-    _M + r"\s+(?:of|in) (?:reinsurance|protection)",
-    r"(?:secure|provide|seeking|sought)\s+(?:up to |between )?" + _M,
+    (_M + r"\s+tranche of", "stated"),
+    # "targeted to secure $150 million in reinsurance", "$95 million of notes"
+    (_M + r"\s+(?:of|in) (?:reinsurance|protection|cover(?:age)?|notes)\b", "stated"),
+    (r"(?:secure|provide)\s+(?:up to |between )?" + _M, "stated"),
+    # "will seek to issue a $75 million or larger tranche" (Finca)
+    (r"(?:issue|issuing|sell|selling)\s+(?:a\s+|an\s+|up\s+to\s+|at\s+least\s+|roughly\s+|around\s+)?" + _M, "stated"),
 )]
 
 # Hyphenated form FIRST: mortgage ILS uses Class M-1A / M-1B / M-1C / M-2 /
@@ -792,6 +940,9 @@ CLASS_RE = re.compile(r"\bClass\s+([A-Z]{1,3}-\d+[A-Z]?|[A-Z]{1,3}\b|\d{1,2}\b)"
 CLASS_CONTEXT_RE = re.compile(
     r"(?:notes?|tranche|securities|bonds?)", re.IGNORECASE)
 
+REGULATORY_CLASS_RE = re.compile(
+    r"\s+(?:Bermuda|insurer|reinsurer|licen[cs]e|regulated|segregated)", re.IGNORECASE)
+
 # Case-insensitivity admits ordinary English: "each class of notes" produced a
 # tranche called "Class OF". Tranche identifiers are letters/digits, never words.
 CLASS_STOPWORDS = {"OF", "THE", "AND", "FOR", "ARE", "WAS", "ITS", "ALL", "ANY",
@@ -803,14 +954,17 @@ CLASS_STOPWORDS = {"OF", "THE", "AND", "FOR", "ARE", "WAS", "ITS", "ALL", "ANY",
 STATED_COUNT_RE = re.compile(
     r"(?<![\d-])\b(one|two|three|four|five|six|seven|eight|\d{1,2})\s+"
     r"(?:tranches|classes)\b", re.IGNORECASE)
-COUNT_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4,
-               "five": 5, "six": 6, "seven": 7, "eight": 8}
+COUNT_WORDS = WORD_NUM   # one vocabulary; validate.py imports it too
 
+RISK_METRICS = ("expected_loss", "attachment_probability",
+                "exhaustion_probability", "spread_risk_margin")
 TRANCHE_PATTERNS = {
     "expected_loss": TIER2_PATTERNS["expected_loss"],
     "attachment_probability": TIER2_PATTERNS["attachment_probability"],
     "exhaustion_probability": TIER2_PATTERNS["exhaustion_probability"],
     "spread_risk_margin": TIER2_PATTERNS["spread_risk_margin"],
+    "price_guidance": TIER2_PATTERNS["price_guidance"],
+    "attachment_point": TIER2_PATTERNS["attachment_point"],
 }
 
 
@@ -845,11 +999,15 @@ def _tranche_windows(prose):
     affected.
     """
     hits = list(CLASS_RE.finditer(prose))
-    # Keep only labels that appear at least once beside note/tranche language.
+    # Keep only labels that appear at least once beside note/tranche language,
+    # and never a regulatory class: "Class 3 Bermuda-based insurer ... Kaith Re
+    # Ltd. has issued a $14.94 million ... notes" is on every Seaside page.
     by_label = {}
     for m in hits:
         ident = m.group(1).upper()
         if ident in CLASS_STOPWORDS:
+            continue
+        if REGULATORY_CLASS_RE.match(prose, m.end()):
             continue
         by_label.setdefault("Class " + ident, []).append(m)
     real = set()
@@ -913,7 +1071,8 @@ def _tranche_context(record):
         "deal_total": _money_to_number(record["size"]["value"] or "") or None,
         "deal_launch": next((h["value"] for h in hist
                              if h["state"] == "launch"), None),
-        "own_series": _series_tokens(record["deal_name"]["value"] or ""),
+        "own_series": (_series_tokens(record["deal_name"]["value"] or "")
+                       | _series_tokens(record["deal_url"]["value"] or "")),
         "deal_status": record.get("deal_status", {}).get("value"),
         "bindings": _bindings_by_label(record["_meta"]["full_details_text"] or ""),
     }
@@ -923,7 +1082,10 @@ def _extract_tranche_metrics(text, ctx):
     """SHARED. Risk metrics and derived severity, identical on both branches."""
     row = {}
     for name, patterns in TRANCHE_PATTERNS.items():
-        f = _apply_patterns(name, patterns, text, ctx["issue_year"])
+        # own_series too: the deal-level path excludes same-year sibling
+        # sentences by series token; the tranche path silently did not.
+        f = _apply_patterns(name, patterns, text, ctx["issue_year"],
+                            ctx.get("own_series", frozenset()))
         row[name] = f["value"]
         row[name + "__conf"] = f["confidence"]
         row[name + "__flags"] = ";".join(str(x) for x in f["flags"]
@@ -954,6 +1116,11 @@ LABEL_BOUND_RE = re.compile(
     re.IGNORECASE)
 
 
+FORWARD_BOUND_RE = re.compile(
+    r"Class\s+([A-Z]{1,3}-\d+[A-Z]?|[A-Z]{1,3}\b|\d{1,2}\b)\s*[\u2013\u2014:-]\s*" + _M,
+    re.IGNORECASE)
+
+
 def _bindings_by_label(prose):
     """{label: [amounts]} for every "AMOUNT [tranche of] Class X" in the prose.
 
@@ -963,7 +1130,17 @@ def _bindings_by_label(prose):
     label that owns it cut off, and M-2 reported B-1's size.
     """
     out = {}
+    # Forward form FIRST: "Class A – $256 million Class B – $647.6 million"
+    # (Merna) is a list where each amount FOLLOWS its label. The backward
+    # regex alone read "$256 million Class B" and shifted every size one
+    # class along. An amount bound forward is not available backward.
+    taken = set()
+    for m in FORWARD_BOUND_RE.finditer(prose or ""):
+        out.setdefault(("Class " + m.group(1)).upper(), []).append(_clean(m.group(2)))
+        taken.add(m.start(2))
     for m in LABEL_BOUND_RE.finditer(prose or ""):
+        if m.start(1) in taken:
+            continue
         out.setdefault(("Class " + m.group(2)).upper(), []).append(_clean(m.group(1)))
     # Shared-subject constructions: "Both the Class A and Class B tranche of
     # notes are sized at EUR 25m each" states ONE amount that belongs to BOTH.
@@ -1005,7 +1182,7 @@ def _bound_size_for(label, prose):
 
 
 def _mine_sizes(label, text, ctx, exclude_total):
-    """Ordered size mentions in one window: first is launch, last is final."""
+    """Ordered (value, kind) size mentions in one window: first is launch."""
     sizes, skipped, dropped = [], 0, 0
     label_re = (re.compile(r"\b" + re.escape(label) + r"\b", re.IGNORECASE)
                 if label else None)
@@ -1020,38 +1197,69 @@ def _mine_sizes(label, text, ctx, exclude_total):
                 continue
             if require_label and label_re and not label_re.search(sentence):
                 continue
-            for rx in TRANCHE_SIZE_RES:
-                m = rx.search(sentence)
+            main = PAREN_CONVERSION_RE.sub(" ", sentence)
+            for rx, kind in TRANCHE_SIZE_RES:
+                m = rx.search(main)
                 if not m:
                     continue
-                cand = _clean(m.group(1))
+                g = next(i for i in range(1, m.re.groups + 1) if m.group(i))
+                cand = _clean(m.group(g))
                 num = _money_to_number(cand) or 0
                 if num < 1e6:
                     continue
                 if _bound_to_other_label(cand, label, ctx.get("bindings")):
                     continue  # this amount explicitly names another tranche
-                if _governed_by_loss_level(sentence, m.start(1), m.end(1)):
+                if _governed_by_loss_level(main, m.start(g), m.end(g)):
                     continue  # a loss level, not a size
                 if (exclude_total and ctx["deal_total"]
                         and abs(num - ctx["deal_total"]) / ctx["deal_total"] <= 0.01):
                     dropped += 1
                     continue
-                sizes.append(cand)
+                sizes.append((cand, kind))
                 break
         if sizes:
             break
     return sizes, skipped, dropped
 
 
+def _launch_final(sizes):
+    """(launch, final, flags) from ordered (value, kind) mentions.
+
+    A range's low end is a legitimate launch state and never a final: IBRD
+    111-112 Class B reported $25m as final from "between $25m and $100m"
+    while the page says it priced at $95m.
+    """
+    if not sizes:
+        return None, None, []
+    flags = []
+    launch = sizes[0][0]
+    if sizes[0][1] == "range":
+        flags.append("launch_from_range_low_end")
+    settled = [v for v, k in sizes if k != "range"]
+    if settled:
+        final = settled[-1]
+    else:
+        final = None
+        flags.append("no_settled_size:range_only")
+    return launch, final, flags
+
+
 def _size_row(launch, final, states, flags):
     a, b = _money_to_number(launch or ""), _money_to_number(final or "")
     same_ccy = _currency(launch or "") == _currency(final or "")
+    delta = None
+    if a and b and same_ccy and a != b:
+        delta = round((b - a) / a * 100, 1)
+        if abs(b - a) / a <= 0.01:
+            # "$19.5 million" in prose vs "$19.451m" in the summary box is
+            # rounding, not a resize; the deal-level rule uses the same 1%.
+            delta = None
+            flags = list(flags) + ["size_rounding_only"]
     return {
         "tranche_size_at_launch": launch,
         "tranche_size_final": final,
         "tranche_size_states": states,
-        "tranche_size_delta_pct": (round((b - a) / a * 100, 1)
-                                   if a and b and same_ccy and a != b else None),
+        "tranche_size_delta_pct": delta,
         "tranche_size_flags": ";".join(f for f in flags if f),
     }
 
@@ -1065,7 +1273,8 @@ def _size_multi(label, text, ctx):
         # sits outside its window entirely.
         # Use the prebuilt map, which also carries shared-subject "each"
         # distributions that a direct rescan of the prose would miss.
-        sizes = list((ctx.get("bindings") or {}).get((label or "").upper(), []))
+        sizes = [(v, "stated") for v in
+                 (ctx.get("bindings") or {}).get((label or "").upper(), [])]
         if sizes:
             extra.append("size_from_label_binding")
     if not sizes and dropped:
@@ -1077,7 +1286,7 @@ def _size_multi(label, text, ctx):
             extra.append("equals_deal_total_accepted")
     anchored = bool(re.search(
         r"finalis|finaliz|priced|final(?:ly)? |secured|settled", text, re.IGNORECASE))
-    flags = []
+    launch, final, flags = _launch_final(sizes)
     if len(sizes) > 1 and not anchored:
         flags.append("tranche_size_final_unanchored")
     if skipped:
@@ -1085,21 +1294,23 @@ def _size_multi(label, text, ctx):
     if dropped and "equals_deal_total_accepted" not in extra:
         flags.append("deal_total_excluded=%d" % dropped)
     flags.extend(extra)
-    return _size_row(sizes[0] if sizes else None,
-                     sizes[-1] if sizes else None, len(sizes), flags)
+    return _size_row(launch, final, len(sizes), flags)
 
 
 def _size_single(label, text, ctx):
     """BRANCH: one tranche. It IS the deal, so Tier 1 answers directly."""
     sizes, skipped, _ = _mine_sizes(label, text, ctx, exclude_total=False)
-    launch = ctx["deal_launch"] or (sizes[0] if sizes else None)
+    mined_launch, mined_final, flags = _launch_final(sizes)
+    launch = ctx["deal_launch"] or mined_launch
     if ctx.get("deal_status") in ("not_issued", "cancelled"):
         # No Tier-1 final exists BECAUSE the deal never issued. Promoting the
         # prose target to "final" reported principal that does not exist.
         return _size_row(launch, None, len(sizes),
                          ["no_final_size:%s" % ctx["deal_status"]])
-    final = ctx["deal_size"] or (sizes[-1] if sizes else None)
-    flags = ["final_from_tier1"] if ctx["deal_size"] else []
+    final = ctx["deal_size"] or mined_final
+    if ctx["deal_size"]:
+        flags = [f for f in flags if not f.startswith("no_settled_size")]
+        flags.append("final_from_tier1")
     if skipped:
         flags.append("foreign_deal_reference_excluded=%d_sentence(s)" % skipped)
     return _size_row(launch, final, len(sizes), flags)
@@ -1119,7 +1330,7 @@ def parse_tranches(record):
         # than silently reporting the first.
         unresolved = any(
             any(str(f).startswith("candidates=") for f in record[k]["flags"])
-            for k in TRANCHE_PATTERNS)
+            for k in RISK_METRICS)
         windows = [(None, ctx["prose"])]
 
     # What does the page say about itself? Some deals (Trinity Re 1998, Mosaic
@@ -1128,8 +1339,7 @@ def parse_tranches(record):
     # do NOT fabricate rows for them -- we carry the discrepancy instead.
     stated = None
     for sent in sentences(ctx["prose"]):
-        own = set(re.findall(r"\b(20\d\d-\d+)\b", record["deal_name"]["value"] or ""))
-        if set(re.findall(r"\b(20\d\d-\d+)\b", sent)) - own:
+        if _series_tokens(sent) - ctx["own_series"]:
             continue  # describes a sibling deal
         if re.search(r"\bfrom the\b|\bprevious\b|\bprior\b", sent, re.IGNORECASE):
             continue
@@ -1211,6 +1421,16 @@ def check_tranche_sum(record, rows):
     if not whole:
         return None, "unparseable deal size"
     delta = (total - whole) / whole
-    return abs(delta) <= 0.01, (
-        "tranches=%s sum=%.0f deal=%.0f delta=%+.1f%%"
+    if abs(delta) <= 0.01:
+        return True, ("basis=notes tranches=%s sum=%.0f deal=%.0f delta=%+.1f%%"
+                      % (sizes, total, whole, delta * 100))
+    # Does the headline include capital raised beside the notes?
+    other = [o for o in (record.get("other_instruments", {}).get("value") or [])
+             if _currency(o["value"]) == _currency(deal_size)]
+    extra = sum(_money_to_number(o["value"]) or 0 for o in other)
+    if other and abs(total + extra - whole) / whole <= 0.01:
+        return True, ("basis=notes+%s tranches=%s sum=%.0f other=%.0f deal=%.0f"
+                      % ("+".join(sorted({o["kind"] for o in other})), sizes, total, extra, whole))
+    return False, (
+        "basis=mismatch tranches=%s sum=%.0f deal=%.0f delta=%+.1f%%"
         % (sizes, total, whole, delta * 100))

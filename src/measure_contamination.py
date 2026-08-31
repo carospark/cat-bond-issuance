@@ -20,10 +20,10 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
-from fetch import fetch                              # noqa: E402
+from fetch import fetch, DEAL_DIRECTORY_URL          # noqa: E402
 from parse_deal import parse_deal, parse_tranches, TIER2_PATTERNS, sentences  # noqa: E402
 
-BASE = "https://www.artemis.bm/deal-directory/"
+BASE = DEAL_DIRECTORY_URL
 PAGES = ["ibrd-car-jamaica-2026", "floodsmart-re-ltd-series-2024-1",
          "residential-reinsurance-2026-limited-series-2026-1",
          "seaside-re-series-2026-61", "windmill-ii-re-dac-2020",

@@ -25,18 +25,23 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
-from parse_deal import _money_to_number, _clean, sentences   # noqa: E402
+from parse_deal import (_money_to_number, _clean, sentences,    # noqa: E402
+                        _series_tokens, MONEY_RE)
 
 COMPARATIVE = re.compile(
     r"\b(previous|prior|predecessor|last year|earlier|maturing|compared to|"
     r"which eventually|that\s+\d{4})\b", re.IGNORECASE)
 
-# Tier-2 fields ONLY. `size` is read structurally from the summary list, not
-# mined from prose, so it cannot be contaminated by a neighbouring sentence.
-# Auditing it flagged FloodSmart 2024-1's genuine $575m as borrowed, purely
-# because its 2021-1 sibling was also $575m and a nearby sentence says so.
+# Audited by PROVENANCE, not field name. A Tier-1 value cannot be contaminated
+# by a sentence (FloodSmart's genuine $575m was flagged because its 2021-1
+# sibling was also $575m), so `size` is out -- but so is any tranche final
+# that merely copies Tier 1. The prose-mined launch size, which IS what
+# Windmill I's $46m contaminated, is in.
 CHECK_FIELDS = ["expected_loss", "attachment_probability", "spread_risk_margin",
                 "maturity_date"]
+TRANCHE_FIELDS = ("tranche_size_at_launch", "tranche_size_final",
+                  "expected_loss", "attachment_probability", "spread_risk_margin")
+PCT_RE = re.compile(r"[\d.]+\s*%")
 
 
 def _numeric(text):
@@ -63,7 +68,7 @@ class SiblingRegistry:
             entries = []
             for i, sz in enumerate(x for x in r.sibling_sizes.split("|") if x):
                 # queue.csv lists sibling sizes oldest-first
-                for part in re.findall(r"[$€£¥][\d,.]+\s*(?:million|billion|bn|m)?", sz):
+                for part in MONEY_RE.findall(sz):
                     entries.append({"deal": "%s (sibling %d)" % (r.family, i + 1),
                                     "field": "size", "raw": _clean(part),
                                     "num": _numeric(part)})
@@ -101,15 +106,28 @@ class SiblingRegistry:
         m = re.search(r"(19\d\d|20\d\d)", record["date_of_issue"]["value"] or "")
         if m:
             issue_year = int(m.group(1))
+        # Transformer platforms (Seaside, Eclipse, Artex ...) share a vehicle,
+        # not a programme; their prose never cites an earlier cell, and 68
+        # "sibling sizes" of small round numbers would match by accident.
+        if meta is not None and getattr(meta, "family_kind", "") == "platform":
+            return []
         siblings = self._siblings_for(deal_url)
         if not siblings:
             return []
+        own_series = _series_tokens(meta.issuer_name if meta is not None else "") \
+            | _series_tokens(record["deal_name"]["value"] or "")
 
         candidates = [(f, record[f]["value"]) for f in CHECK_FIELDS
                       if isinstance(record.get(f), dict) and record[f]["value"]]
+        launch = next((h["value"] for h in (record["size_history"]["value"] or [])
+                       if h["state"] == "launch"), None)
+        if launch:
+            candidates.append(("size_history:launch", launch))
         for t in tranches:
-            for f in ("tranche_size_at_launch", "tranche_size_final",
-                      "expected_loss", "attachment_probability", "spread_risk_margin"):
+            tier1_final = "final_from_tier1" in (t.get("tranche_size_flags") or "")
+            for f in TRANCHE_FIELDS:
+                if f == "tranche_size_final" and tier1_final:
+                    continue  # copied from the summary box, not mined
                 if t.get(f):
                     candidates.append(("%s:%s" % (t["tranche_id"], f), t[f]))
 
@@ -122,12 +140,20 @@ class SiblingRegistry:
                     if s["num"] is not None and abs(s["num"] - num) < 1e-9]
             if not hits:
                 continue
-            hosts = [s for s in sents if str(value) in s]
+            # Hosts by NUMBER: "$4m" (summary-box form) never appears in prose
+            # that says "$4 million", so a string test found no host and
+            # every such verdict was silently "coincidental".
+            hosts = [s for s in sents
+                     if any(_numeric(tok) is not None and abs(_numeric(tok) - num) < 1e-9
+                            for tok in MONEY_RE.findall(s) + PCT_RE.findall(s))]
             backward = []
             for h in hosts:
-                yrs = [int(y) for y in re.findall(r"\b(19|20)\d\d\b", h)] or []
                 yrs = [int(y) for y in re.findall(r"\b((?:19|20)\d\d)\b", h)]
-                if (issue_year and any(y < issue_year - 1 for y in yrs)) \
+                # Strictly earlier than the issue year -- the parser's rule.
+                # `< issue_year - 1` here let ResRe 2019-1's coupon pass as
+                # coincidental on the 2020 page.
+                if (issue_year and any(y < issue_year for y in yrs)) \
+                        or (_series_tokens(h) - own_series) \
                         or COMPARATIVE.search(h):
                     backward.append(h)
             findings.append({

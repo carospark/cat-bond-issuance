@@ -1,6 +1,7 @@
 """Polite, cache-first fetching of public web pages."""
 
 import hashlib
+import os
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -16,6 +17,13 @@ USER_AGENT = (
 
 REQUEST_DELAY_SECONDS = 2
 
+DEAL_DIRECTORY_URL = "https://www.artemis.bm/deal-directory/"
+
+# Set ARTEMIS_OFFLINE=1 to make any cache miss an error instead of a request.
+# Reviews and tests are meant to run without touching the network; this makes
+# the claim checkable rather than declared.
+OFFLINE_ENV = "ARTEMIS_OFFLINE"
+
 
 def _normalise(url):
     """Canonical form for cache identity.
@@ -25,7 +33,13 @@ def _normalise(url):
     and fragment are not part of a page's identity here.
     """
     parsed = urlparse(url)
-    return parsed._replace(path=parsed.path.rstrip("/"), fragment="").geturl()
+    # Scheme and host are case-insensitive; a query string never selects a
+    # different Artemis page. NOTE: every change here re-keys raw/ -- migrate
+    # (rename) the cached files in the same commit, or the whole cache is
+    # silently re-fetched.
+    return parsed._replace(scheme=parsed.scheme.lower(), netloc=parsed.netloc.lower(),
+                           path=parsed.path.rstrip("/"), query="",
+                           fragment="").geturl()
 
 
 def _cache_path(url):
@@ -49,6 +63,10 @@ def fetch(url):
     if path.exists():
         print(f"[cache] {url} -> {path.name}")
         return path.read_text(encoding="utf-8")
+
+    if os.environ.get(OFFLINE_ENV):
+        raise FileNotFoundError(
+            f"{OFFLINE_ENV} is set and {url} is not cached ({path.name})")
 
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     time.sleep(REQUEST_DELAY_SECONDS)

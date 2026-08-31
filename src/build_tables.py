@@ -9,12 +9,8 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 from fetch import fetch                        # noqa: E402
-from parse_deal import parse_deal, parse_tranches, FIELD_TIER, TIER1_KEYS  # noqa: E402
-
-# Risk metrics now live in tranches.csv only; keeping them on the deal row
-# would reintroduce the "tranche 1 pretending to be the deal" bug.
-TRANCHE_ONLY = {"expected_loss", "attachment_probability", "exhaustion_probability",
-                "spread_risk_margin", "conditional_severity"}
+from parse_deal import (parse_deal, parse_tranches, FIELD_TIER,   # noqa: E402
+                        TIER1_KEYS, TRANCHE_ONLY)
 
 
 def main(urls):

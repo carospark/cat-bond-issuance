@@ -7,7 +7,6 @@ Emits, into data/:
   data_dictionary.csv what every column and flag means
 """
 
-import hashlib
 import sys
 from pathlib import Path
 
@@ -17,10 +16,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 from fetch import fetch, _cache_path                           # noqa: E402
 from parse_deal import (parse_deal, parse_tranches, check_tranche_sum,  # noqa: E402
-                        TIER1_KEYS, FIELD_TIER)
-
-TRANCHE_ONLY = {"expected_loss", "attachment_probability", "exhaustion_probability",
-                "spread_risk_margin", "conditional_severity"}
+                        TIER1_KEYS, FIELD_TIER, TRANCHE_ONLY)
+from validate import validate                                  # noqa: E402
 
 
 def cached_urls():
@@ -35,12 +32,16 @@ def cached_urls():
 
 
 def main():
-    deals, tranches, long_rows = [], [], []
+    deals, tranches, long_rows, findings = [], [], [], []
     for r in cached_urls():
         rec = parse_deal(fetch(r.deal_url), deal_url=r.deal_url)
         trs = parse_tranches(rec)
         slug = r.deal_url.rstrip("/").rsplit("/", 1)[-1]
         ok, detail = check_tranche_sum(rec, trs)
+        # validation.csv is produced HERE, from the same parse, with the index
+        # row -- it was previously an untracked one-off with index_row=None.
+        for f in validate(rec, trs, r):
+            findings.append({"deal": slug, **f})
 
         row = {"deal_slug": slug, "family": r.family, "family_seq": r.family_seq,
                "date_text": r.date_text, "index_issuer_name": r.issuer_name}
@@ -92,6 +93,9 @@ def main():
     d.to_csv(ROOT / "data" / "deals.csv", index=False, encoding="utf-8")
     t.to_csv(ROOT / "data" / "tranches.csv", index=False, encoding="utf-8")
     lg.to_csv(ROOT / "data" / "review_long.csv", index=False, encoding="utf-8")
+    v = pd.DataFrame(findings, columns=["deal", "severity", "check", "detail"])
+    v.to_csv(ROOT / "data" / "validation.csv", index=False, encoding="utf-8")
+    print("validation.csv  %d findings %s" % (len(v), v.severity.value_counts().to_dict()))
     print("deals.csv       %d rows x %d cols" % d.shape)
     print("tranches.csv    %d rows x %d cols" % t.shape)
     print("review_long.csv %d rows x %d cols" % lg.shape)
