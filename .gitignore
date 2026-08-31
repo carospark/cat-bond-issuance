@@ -42,3 +42,7 @@ data/*.csv
 /data/raw
 plots/*.png
 plots/*.svg
+
+# Adversarial review reports and prompts: working notes, not deliverables.
+REVIEW_ROUND*.md
+REVIEW_PROMPT.md
