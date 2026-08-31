@@ -1,126 +1,128 @@
-# Adversarial review request (round 4): Artemis cat bond parser
+# Adversarial review request (round 5): Artemis cat bond parser
 
-Fourth review. The previous three found **8, 9 and 16 real defects** — every one
-reproducible, several of them wrong values sitting in the output. **The count is
-rising, not falling.** Either the defect density is not dropping, or each round
-of fixes creates new surface. Work out which, and assume more remain.
+Fifth review. Rounds 1–4 found **8, 9, 16 and ~16** reproducible defects. You
+did rounds 3 and 4. Assume more remain.
 
-## What this is
+## Where to work
 
-`src/` scrapes the Artemis.bm catastrophe bond deal directory (1,311 deals,
-Dec 1996 – Aug 2026) into structured tables. ~3,100 lines. `raw/` holds 38
-cached deal pages plus the index and one stray dashboard page.
+**This worktree only:** `~/Desktop/cat_bond_fund_flow-wt/claude-parser`, branch
+`claude-parser`, one commit ahead of `main`. Another agent is working `main` in
+the primary checkout — do not touch it. `raw/`, `.venv/`, `data/raw/` and the
+`data/*.csv` outputs are symlinks into that checkout; read them, don't copy.
 
-**Do not make network requests.** `fetch()` is cache-first, and Artemis
-restricts AI use of its content — work only from what is cached. Say explicitly
-if you fetch anything. (An earlier reviewer declared no network activity while a
-file appeared in `raw/`; the likely cause was found and fixed, but declare
-regardless.)
+`./.venv/bin/python tests/test_golden.py` → 532 checks, all passing. Python 3.9.
+~4,400 lines. `raw/` now holds **231 cached deal pages** (was 39) — random
+samples have been drawn since your last look.
 
-`./.venv/bin/python tests/test_golden.py` → 290 checks over 17 pages, all
-passing. Python 3.9: no match statements, no `X | Y` types.
-
-**Two tiers.** Tier 1 = the "At a glance" list, read structurally, `high`
-confidence, final terms. Tier 2 = "Full details" prose plus `Update N:` blocks,
-regex-mined, `medium`/`low`, launch-time terms. Tier 2 never writes into a
-Tier-1 field; Tier 1 *constrains* Tier 2. Risk metrics are tranche-level. Every
-field is `{value, confidence, method, evidence, flags}`. `src/validate.py` runs
-cross-field invariants. `data/queue.csv` orders a future crawl family-by-family,
-chronologically ascending, because prose cites predecessor deals.
+**No network requests.** Everything is cached; Artemis restricts AI use of its
+content. Declare any fetch explicitly.
 
 ---
 
-## First: verify the round-3 fixes actually work
+## What changed since round 4 — none of it reviewed
 
-I fixed the following after your last report. **Do not take the commit messages
-on trust** — I have twice committed code that was broken in ways the tests did
-not catch. Check each against `raw/`, and check whether the fix introduced a new
-defect:
+I measured the parser on **60 random deals** rather than the 38 hand-picked ones
+we had been grading ourselves against. Violation rate: **30% random vs 8%
+curated.** Two of the wrong values were classes already "fixed" twice — Market
+Re's deal total leaking into a tranche, Alamo's `$2.6 billion` loss level read
+as a size. A veto only covers the phrasing that prompted it.
 
-- **Sibling registry revived** (`sentences` shadowing). Now has a unit test.
-  It then produced a false `LIKELY_CONTAMINATION` on FloodSmart's genuine
-  `$575m`, so `size` was removed from `CHECK_FIELDS` as a Tier-1 field. Is that
-  the right cut, or does it now under-audit?
-- **`layer` and `term loan` added to the loss-level veto.** Everglades now reads
-  `$400m → $1.5bn +275%`. Does the veto now kill a genuine size?
-- **Range low-end matching** (`between $25m and $100m in size`). Correct for a
-  launch state — is it wrong anywhere a range describes something else?
-- **Update headers with dates** (`Update 2 (May 4th 2016):`). Operational Re
-  went 1 → 5 states, IBRD 111-112 to 15. Are those segment labels usable, and
-  did gluing stop in the right places?
-- **Roman numerals to XXX and the orphaned `-N` strip** in `build_queue.py`.
-  1,108 deals now in serial families. Any wrong merge?
-- **Same-month sibling ordering** reversed to oldest-first.
-- **`fetch()` cache-key normalisation**, plus three modules that derived the
-  cache filename independently and silently emitted zero rows when it changed.
+So I added a layer, in `src/mentions.py`:
 
-## Still open from your report — I have not touched these
+1. **Kind classification.** Every money mention is typed once against the
+   *nearest* governing cue — attachment, exhaustion, deductible, layer, term
+   loan, payout, trigger, size. `_governed_by_loss_level` now delegates to it
+   and accepts only `size` or `unknown` (`unknown` admitted deliberately, to
+   preserve discovery's recall).
+2. **Constraint selection** (`solve_tranche_sizes`, `_reconcile_tranche_sizes`).
+   Where several typed candidates exist per tranche, prefer the combination
+   whose parts equal the whole. The parts-vs-whole invariant now helps *choose*
+   the answer instead of only checking it.
 
-Forward-binding in `_bindings_by_label` (Merna's `Class A – $256m Class B –
-$647.6m` binds each amount to the *next* label); the currency gaps (CHF, EUR
-as a word, C$, NZ$ — Operational Re still 0/3 sizes); `coupon of X% to Y%`
-returning the low end; tranche delta lacking tolerance; and the eight guards
-your mutation table showed as deletable-green.
+Market Re now reads `$22m + $8m = $30m`, Alamo `$300m + $400m = $700m`.
 
-**Your deepest finding was that Tier-1 "Size" is not one thing** — Merna's
-`$1.18bn` includes `$122m` of term loans, IBRD's excludes swaps. That
-undermines parts-vs-whole wherever it holds. **How widespread is it across the
-38 cached pages, and what is the right representation?** This matters more than
-any single parse bug.
-
-## Where to look that nobody has
-
-- **The outputs, not the code.** `data/deals.csv` (38 × 100), `tranches.csv`
-  (56 × 24), `review_long.csv` (1,736 rows). Are the values right? Sample
-  aggressively against `raw/`. Prior rounds reviewed logic; nobody has audited
-  the product.
-- **`data/queue.csv` as a crawl plan.** 1,311 rows, and only 38 pages have ever
-  been parsed. What breaks at scale that 38 pages cannot show — pathological
-  names, families of 69, deals whose page does not exist?
-- **My two process failures**, which may indicate classes of bug rather than
-  incidents: I changed a cache key without migrating (17 needless refetches),
-  and committed a builder that emitted zero rows because a second module
-  duplicated a key derivation. Where else is a derivation, constant or
-  assumption duplicated across modules such that changing one silently breaks
-  another?
+Also: proximity beats priority in classification; `_money_to_number` requires a
+leading digit (it crashed on a bare comma via `float("")`); the sampler draws
+from all 1,311 deals with a fixed seed, because sampling the *uncached* pool
+meant every run measured a different set.
 
 ---
 
-## Part 2: design and analysis
+## Priority A: does the constraint hide errors?
 
-Your round-3 conclusion was that the strongest defensible output is a
-**primary-market absorption series** — upsize share, final spread vs guidance
-midpoint, spread multiple, gross issuance, net issuance — joined to UCITS
-cat-bond fund NAV, the Swiss Re index and Artemis's ILS-manager AUM directory,
-with private-fund subscriptions, secondary flows and causal claims
-unsupportable regardless.
+**In round 3 you warned that "a solver can hide source inconsistencies if
+constraints are treated as absolute."** I have now built the thing you warned
+about. Test that warning directly.
 
-Push that from a conclusion to a plan:
+- Where does `_reconcile_tranche_sizes` select a combination that sums
+  correctly but is **wrong**? Coincidental arithmetic is the failure mode:
+  candidates that happen to add up while belonging to different quantities.
+- It prefers the combination with the most distinct values, to avoid one figure
+  counted twice. When is that heuristic wrong — genuinely equal tranches?
+- It silently returns when currencies are mixed, when a label has no candidate,
+  and when no combination reconciles. Are those the right refusals, and are
+  they visible enough? A silent return leaves the pre-constraint value in place
+  with no flag saying a constraint was attempted and failed.
+- Does it ever overwrite a **correct** discovered value with an incorrect one
+  that happens to reconcile?
 
-1. **Which fields does that series actually need**, and which of them does the
-   parser produce reliably today? Name the ones that are not yet trustworthy.
-2. **What is the minimum viable version** using only this corpus, with no join?
-3. **What would falsify it?** If the absorption series were misleading, how
-   would that show up?
-4. You said post-issuance updates (resets, payouts, marks) are a third temporal
-   tier and the only place the corpus records capital *leaving*. **How should
-   that be modelled**, and how much of it is actually present across the 38
-   pages?
-5. Given the defect trend, **is continuing to patch this parser the right
-   call**, or should the Tier-2 pipeline be rebuilt around typed events before
-   the crawl? Answer concretely — cost, what carries over, how I would know.
+## Priority B: the benchmark is measuring the wrong thing
 
-**Be honest about null results.** "I could not beat the current approach on X,
-because Y" is a useful answer. Do not invent improvements to look useful.
+The reproducible number is **seed 20260831, n=80: 22% of deals carry a
+violation, 0.34 per deal, 0 crashes.** But violations only count what
+`validate.py` knows to check. **A wrong value that satisfies every invariant is
+invisible to this measurement**, and the constraint now actively selects values
+that satisfy one of them.
+
+- How would you measure *accuracy* rather than *violation rate*? What would a
+  ground-truth exercise look like, and how large a hand-labelled sample would
+  be needed to say something defensible?
+- Is 80 enough for a 22% rate? What is the confidence interval, and what
+  stratification would make it more informative than a uniform draw?
+- Take a handful of deals the validator passes cleanly and check them by hand
+  against `raw/`. Silent wrong values are the thing I most want found.
+
+## Priority C: the newly surfaced arithmetic violations
+
+The n=80 run produced one `EL <= attachment_probability` and one
+`severity <= 1` — arithmetic impossibilities, so a wrong EL or attachment
+probability. Risk metrics have had far less attention than sizes. Diagnose
+those two and say whether they are instances or a class.
+
+## Priority D: still open from your own reports
+
+Forward-binding edge cases; the `coupon of X% to Y%` low-end return; tranche
+delta tolerance; the guards your mutation table showed deletable-green; and
+your deepest finding — **Tier-1 "Size" is not one thing** (Merna includes
+`$122m` of term loans, IBRD excludes swaps). Has the constraint made that
+worse, since it now enforces parts-vs-whole against a headline that sometimes
+measures something different from the sum of its notes?
+
+---
+
+## Part 2: design
+
+You proposed typed events and constraint selection. I have implemented a
+narrow version of both. **Was the narrow version the right call, or does the
+half-measure carry the costs of both approaches?** Specifically: `mentions.py`
+now duplicates money and class-label grammars that already exist in
+`parse_deal.py` — the duplicated-derivation class that has bitten this project
+twice.
+
+Then: given 231 cached pages and a working constraint layer, **is the parser
+good enough to crawl the remaining 1,080?** Answer with a number and a
+criterion, not a judgement. If not, what specifically must improve first?
+
+**Be honest about null results.** "I could not find a case where the constraint
+selects wrongly" is a genuinely useful answer and I would rather have it than
+a speculative one.
 
 ---
 
 ## Output
 
 **Part 1 (defects).** file:line, what breaks, a concrete input from `raw/`,
-severity, minimal fix. Ranked. Five real defects with reproductions beat thirty
-speculative notes. Say in one line where a focus area is sound.
+severity, minimal fix. Ranked. Reproductions over speculation.
 
-**Part 2 (design).** Kept separate. What it replaces, the benefit, the cost,
-what it breaks, how I would verify it helped. List what you judged already
-correct — that list is as valuable as the proposals.
+**Part 2 (design).** Separate. What it replaces, benefit, cost, what it breaks,
+how I would verify. List what you judged already correct.
