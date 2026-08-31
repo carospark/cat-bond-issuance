@@ -46,3 +46,9 @@ plots/*.svg
 # Adversarial review reports and prompts: working notes, not deliverables.
 REVIEW_ROUND*.md
 REVIEW_PROMPT.md
+
+# Moved to the analysis repository (different data governance):
+#   github.com/carospark/cat-bond-flow-analysis
+config/
+data/MANIFEST*.md
+src/pull_tier1_sources.py
