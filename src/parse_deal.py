@@ -29,6 +29,7 @@ from bs4 import BeautifulSoup
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fetch import fetch
+from mentions import classify, extract, solve_tranche_sizes
 
 LABEL_MAP = {
     "issuer": "issuer",
@@ -175,11 +176,27 @@ NEGATED_RESIZE_RE = re.compile(
 
 
 def _governed_by_loss_level(text, start, end):
-    """True if a loss-level noun sits immediately around this amount."""
+    """True if this amount is NOT usable as a size.
+
+    Was a veto list -- deductible, attachment, exhaust, layer, term loan --
+    grown one entry per reviewer-found instance. Measured on 60 RANDOM deals
+    the classes recurred anyway: Alamo's "$2.6 billion" was still read as a
+    tranche size after two rounds of widening, because a veto only ever covers
+    the phrasing that prompted it.
+
+    Now asks the classifier what the amount IS and accepts only a size or an
+    unclassified amount. `unknown` is deliberately admitted: the existing
+    discovery machinery has better recall than any single cue list and this
+    must not make it worse. The veto regexes are kept as a belt-and-braces
+    first check since they are strictly narrower than the classifier.
+    """
     if LOSS_LEVEL_RE.search(text[max(0, start - 45):end + 45]):
         return True
-    return bool(LAYER_RE.search(text[end:end + 12])
-                or LAYER_RE.search(text[max(0, start - 25):start]))
+    if (LAYER_RE.search(text[end:end + 12])
+            or LAYER_RE.search(text[max(0, start - 25):start])):
+        return True
+    kind, _cue, _conf = classify(text, start, end)
+    return kind not in ("size", "unknown")
 AGGREGATE_RE = re.compile(r"\btotal|combined|aggregate|altogether|in all\b",
                           re.IGNORECASE)
 
@@ -258,10 +275,16 @@ def _field(value=None, confidence=None, method=None, evidence=None, flags=None):
 
 def _money_to_number(text):
     """Rough numeric value of a money string, for comparison/flagging only."""
-    m = re.search(r"([\d,]+(?:\.\d+)?)\s*(million|billion|bn|m|b)?", text, re.I)
+    # Require a leading digit: "[\d,]+" matched a bare comma, so a stray "$,"
+    # reached float("") and crashed the parse. Permissive numeric grammars were
+    # flagged in review as a class; this is the instance that bit.
+    m = re.search(r"(\d[\d,]*(?:\.\d+)?)\s*(million|billion|bn|m|b)?", text, re.I)
     if not m:
         return None
-    num = float(m.group(1).replace(",", ""))
+    try:
+        num = float(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
     unit = (m.group(2) or "").lower()
     return num * MULTIPLIER.get(unit, 1.0)
 
@@ -1316,6 +1339,58 @@ def _size_single(label, text, ctx):
     return _size_row(launch, final, len(sizes), flags)
 
 
+def _reconcile_tranche_sizes(rows, ctx):
+    """Choose among candidate sizes so the parts equal the whole.
+
+    Discovery (windows + label binding) is good at FINDING candidates and bad
+    at choosing between them, which is where every veto was really aimed. The
+    parts-vs-whole invariant already knew the answer -- it was just being used
+    to check the result instead of to pick it.
+
+    Candidates come from both sources: the size discovery already chose, plus
+    every typed size mention scoped to that label. Applied only when a unique
+    combination reconciles; otherwise the row is left alone and flagged, since
+    an unresolved tranche beats a confident wrong one.
+    """
+    labelled = [r for r in rows if r.get("tranche_id")]
+    if len(labelled) < 2 or not ctx.get("deal_total"):
+        return
+    mentions = extract(ctx["prose"])
+    text_of, by_label = {}, {}
+    for r in labelled:
+        lab = r["tranche_id"]
+        cands = {}
+        cur = r.get("tranche_size_final")
+        if cur and _money_to_number(cur):
+            cands[_money_to_number(cur)] = cur
+        for m in mentions:
+            if m["kind"] == "size" and (m["scope"] or "").upper() == lab.upper():
+                cands.setdefault(m["value"], m["text"])
+        if not cands:
+            return                       # incomplete: nothing to reconcile
+        by_label[lab] = cands
+        text_of.update(cands)
+
+    if len({_currency(t) for c in by_label.values() for t in c.values()}) > 1:
+        return                           # mixed currencies: refuse to add up
+
+    fake = [{"kind": "size", "scope": lab, "value": v}
+            for lab, c in by_label.items() for v in c]
+    solution, _cands, _reason = solve_tranche_sizes(fake, ctx["deal_total"])
+    if not solution:
+        return
+    for r in labelled:
+        chosen = solution.get(r["tranche_id"])
+        if chosen is None:
+            continue
+        current = _money_to_number(r.get("tranche_size_final") or "")
+        if current is not None and abs(current - chosen) < 1e-6:
+            continue                     # discovery already agreed
+        r["tranche_size_final"] = text_of[chosen]
+        r["tranche_size_flags"] = ";".join(
+            x for x in [r.get("tranche_size_flags"), "size_from_parts_vs_whole"] if x)
+
+
 def parse_tranches(record):
     """One row per tranche, falling back to a single unlabelled tranche."""
     ctx = _tranche_context(record)
@@ -1394,6 +1469,7 @@ def parse_tranches(record):
         row["stated_tranche_count"] = stated
         row["tranche_flags"] = ";".join(flags)
         rows.append(row)
+    _reconcile_tranche_sizes(rows, ctx)
     return rows
 
 
