@@ -51,3 +51,18 @@ Artemis excludes mortgage ILS from this dashboard, while `data/index.csv`
 contains the full directory. Therefore a positive `SCOPE_GAP` is expected;
 `FAIL_MISSING` means the parsed directory has fewer deals than the dashboard
 and makes the command exit non-zero.
+
+## Tier 1 external-source archive
+
+The tracked source inventory, access notes, coverage, and current pull status
+are in [`data/MANIFEST.md`](data/MANIFEST.md). To refresh all automatable Tier 1
+sources and the snapshot-only Artemis manager directory:
+
+```bash
+./.venv/bin/python src/pull_tier1_sources.py
+```
+
+Raw publisher payloads, parsed snapshots, checksums, and pull logs are written
+under `data/raw/` and are gitignored. The Swiss Re Bloomberg histories remain a
+manual licensed export; see the manifest for exact tickers and the ticker-name
+discrepancy that must be checked at the terminal.

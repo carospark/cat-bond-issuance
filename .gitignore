@@ -32,6 +32,7 @@ notebook/
 # is PUBLIC, so the scrape and its derived tables stay local. The code that
 # produces them is tracked; the content is not. Re-fetch with src/fetch.py.
 raw/
+data/raw/
 data/*.csv
 plots/*.png
 plots/*.svg
