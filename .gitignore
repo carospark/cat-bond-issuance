@@ -52,3 +52,6 @@ REVIEW_PROMPT.md
 config/
 data/MANIFEST*.md
 src/pull_tier1_sources.py
+
+# Nested checkouts of the companion analysis repository.
+.worktrees/
