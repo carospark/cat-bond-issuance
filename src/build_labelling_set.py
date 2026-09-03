@@ -49,9 +49,26 @@ TIER2_FIELDS = [
     "maturity_scheduled", "term_length",
 ]
 DEAL_FIELDS = TIER1_FIELDS + TIER2_FIELDS
+# Lifecycle fields are TRANCHE-level because tranches of one deal diverge:
+# Citrus Re 2015-1 Class A matured on schedule in April 2018 while Class C was
+# extended to April 2020 and then matured early, in March 2019, with a balance
+# of zero.
+#
+# "Maturity" is three separate facts, not one field revised twice:
+#   maturity_scheduled  the date at issue
+#   maturity_extended   a loss-development extension, if any
+#   maturity_actual     when it actually redeemed
+#
+# principal_loss_pct is the only place this source records capital LEAVING.
+# Issuance is an inflow; a written-down tranche is an outflow, and the project
+# question is about flows in both directions. loss_basis records whether the
+# page STATES the loss or the publisher infers it -- Citrus reads "we assume
+# this tranche ... has now paid out", which is an inference, not a figure.
 TRANCHE_FIELDS = [
     "tranche_id", "tranche_size_final", "expected_loss",
     "attachment_probability", "spread_risk_margin",
+    "maturity_scheduled", "maturity_extended", "maturity_actual",
+    "principal_loss_pct", "loss_basis",
 ]
 
 
