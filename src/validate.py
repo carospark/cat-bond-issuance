@@ -26,15 +26,16 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 from parse_deal import (_money_to_number, _currency, sentences,   # noqa: E402
+                        _pct_to_float,
                         _series_tokens, STATED_COUNT_RE, COUNT_WORDS,
                         check_tranche_sum)
 
 
 def _pct(v):
-    if not v:
-        return None
-    m = re.search(r"([\d.]+)\s*%", str(v))
-    return float(m.group(1)) if m else None
+    # Delegates: this had its own copy of the percent grammar, carrying the
+    # same decimal-comma bug as the parser's. Duplicated derivations diverge -
+    # it has happened three times in this project - so there is now one.
+    return _pct_to_float(v)
 
 
 def _same_money(a, b, tol=0.01):

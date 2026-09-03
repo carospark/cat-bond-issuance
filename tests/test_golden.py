@@ -20,7 +20,8 @@ from fetch import fetch          # noqa: E402
 from validate import validate  # noqa: E402
 from sibling_registry import SiblingRegistry  # noqa: E402
 from fetch import DEAL_DIRECTORY_URL as BASE  # noqa: E402
-from parse_deal import _is_backward_reference, sentences  # noqa: E402
+from parse_deal import (_is_backward_reference, sentences,  # noqa: E402
+                        _pct_to_float)
 from parse_deal import (parse_deal, parse_tranches, check_tranche_sum,  # noqa: E402
                         MONTHS, TIER1_KEYS, MONEY_RE, NEGATED_RESIZE_RE,
                         CANCELLED_RE, TIER2_PATTERNS, TRANCHE_SIZE_RES,
@@ -31,6 +32,7 @@ PAGES = [
     # Radnor: mortgage-ILS suffixed class labels (M-1A vs M-1).
     # Trinity: prose states a count it never breaks down -- must be flagged.
     "radnor-re-2020-2-ltd", "trinity-re-ltd",
+    "kilimanjaro-ii-re-ltd-series-2017-1",   # decimal-comma percentages
     # Pages that each exposed a wrong output in adversarial review.
     "atlantic-western-re-ltd",          # lowercase "class A" labels
     "hoplon-ii-insurance-ltd",          # guidance endpoint sold as settled
@@ -463,7 +465,26 @@ def unit_registry_rules():
           str(found))
 
 
+def unit_percent_parsing():
+    """Pin decimal-comma percentages.
+
+    Artemis mixes separators on one page: Kilimanjaro II 2017-1 writes "an
+    expected loss of 2,23%" beside "2.92%". The old grammar captured "23",
+    reporting EL=23% against AP=2.92% -- impossible, caught by EL<=AP.
+
+    Widening the grammar ALONE made it worse: "2,23" then went through a
+    strip of every non-digit-non-dot character, which DELETES the comma and
+    yields 223.0. Capture and conversion are tested together for that reason.
+    """
+    for raw, want in [("2,23%", 2.23), ("2.92%", 2.92), ("23%", 23.0),
+                      ("5.74%", 5.74), (None, None), ("%", None),
+                      ("no digits here", None)]:
+        got = _pct_to_float(raw)
+        check(got == want, f"UNIT pct {raw!r}", f"want={want} got={got}")
+
+
 def main():
+    unit_percent_parsing()
     unit_predicates()
     unit_registry_rules()
     unit_sibling_registry()
@@ -503,7 +524,7 @@ def main():
         # GUARD: EL <= attachment probability (arithmetically required).
         def pct(k):
             v = rec[k]["value"]
-            return float(re.sub(r"[^\d.]", "", v)) if v else None
+            return _pct_to_float(v) if v else None
         el, ap = pct("expected_loss"), pct("attachment_probability")
         if el and ap:
             check(el <= ap, f"GUARD EL<=AP {slug}", f"EL={el} AP={ap}")
@@ -527,8 +548,8 @@ def main():
         # GUARD: per-tranche EL <= AP, and severity built from one tranche.
         for r in rows:
             if r["expected_loss"] and r["attachment_probability"]:
-                e = float(re.sub(r"[^\d.]", "", r["expected_loss"]))
-                a = float(re.sub(r"[^\d.]", "", r["attachment_probability"]))
+                e = _pct_to_float(r["expected_loss"])
+                a = _pct_to_float(r["attachment_probability"])
                 check(e <= a, f"GUARD tranche EL<=AP {slug}:{r['tranche_id']}",
                       f"EL={e} AP={a}")
 
@@ -685,11 +706,22 @@ def main():
     # Pin the total. Guards are conditional on extracted data, so a regression
     # that empties a field silently removes its checks and the suite still
     # reports "all passed" on a smaller suite.
-    EXPECTED_CHECKS = 532
+    EXPECTED_CHECKS = 559
     if len(results) != EXPECTED_CHECKS:
         results.append((False, "GUARD check-count",
                         f"expected {EXPECTED_CHECKS} checks, ran {len(results)}"
                         " - update EXPECTED_CHECKS deliberately"))
+
+        # GUARD: a decimal comma must not inflate a percentage 100x.
+        for r in parse_tranches(rec):
+            el = _pct_to_float(r.get("expected_loss"))
+            ap = _pct_to_float(r.get("attachment_probability"))
+            if el is not None:
+                check(el <= 100, f"GUARD pct-in-range {slug}:{r['tranche_id']}",
+                      f"EL={el}")
+            if el and ap:
+                check(el <= ap, f"GUARD EL<=AP {slug}:{r['tranche_id']}",
+                      f"EL={el} AP={ap}")
 
     passed = sum(1 for ok, *_ in results if ok)
     for ok, label, detail in results:

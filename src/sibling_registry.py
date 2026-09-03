@@ -25,7 +25,8 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
-from parse_deal import (_money_to_number, _clean, sentences,    # noqa: E402
+from parse_deal import (_money_to_number, _clean, sentences,   # noqa: E402
+                        _pct_to_float,
                         _series_tokens, MONEY_RE)
 
 COMPARATIVE = re.compile(
@@ -41,7 +42,7 @@ CHECK_FIELDS = ["expected_loss", "attachment_probability", "spread_risk_margin",
                 "maturity_date"]
 TRANCHE_FIELDS = ("tranche_size_at_launch", "tranche_size_final",
                   "expected_loss", "attachment_probability", "spread_risk_margin")
-PCT_RE = re.compile(r"[\d.]+\s*%")
+PCT_RE = re.compile(r"\d+(?:[.,]\d+)?\s*%")   # decimal comma, as in parse_deal
 
 
 def _numeric(text):
@@ -50,8 +51,7 @@ def _numeric(text):
         return None
     t = str(text)
     if "%" in t:
-        m = re.search(r"([\d.]+)\s*%", t)
-        return float(m.group(1)) if m else None
+        return _pct_to_float(t)      # one grammar, shared -- see parse_deal
     return _money_to_number(t)
 
 

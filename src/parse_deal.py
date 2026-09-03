@@ -57,24 +57,24 @@ MONTHS = (r"(?:January|February|March|April|August|September|October|November|"
           r"Nov|Dec)")
 
 # A settled-price anchor must not accept the first endpoint of a range.
-NOT_RANGE = r"(?!\s*(?:to|and|[-\u2013])\s*[\d.]+\s*%)"
+NOT_RANGE = r"(?!\s*(?:to|and|[-\u2013])\s*\d+(?:[.,]\d+)?\s*%)"
 
 # name -> (pattern, strength). "strong" patterns carry an explicit anchor
 # phrase; "weak" ones are fallbacks and are always downgraded to low.
 TIER2_PATTERNS = {
     "expected_loss": [
-        (r"(?:initial )?expected loss of (?:approximately |around |about )?([\d.]+\s*%)", "strong"),
-        (r"expected loss[^.%]{0,30}?([\d.]+\s*%)", "weak"),
+        (r"(?:initial )?expected loss of (?:approximately |around |about )?(\d+(?:[.,]\d+)?\s*%)", "strong"),
+        (r"expected loss[^.%]{0,30}?(\d+(?:[.,]\d+)?\s*%)", "weak"),
     ],
     "attachment_probability": [
         (r"attachment probability (?:for the notes )?(?:of|is|at|to be) "
-         r"(?:approximately |around |about |said to be )?([\d.]+\s*%)", "strong"),
+         r"(?:approximately |around |about |said to be )?(\d+(?:[.,]\d+)?\s*%)", "strong"),
         # Artemis sometimes writes "attachment point of 2.47%" for the
         # probability (Finca). A percentage is never a monetary point.
-        (r"attachment point (?:at|of) ([\d.]+\s*%)", "weak"),
+        (r"attachment point (?:at|of) (\d+(?:[.,]\d+)?\s*%)", "weak"),
     ],
     "exhaustion_probability": [
-        (r"exhaustion probability of (?:approximately |around )?([\d.]+\s*%)", "strong"),
+        (r"exhaustion probability of (?:approximately |around )?(\d+(?:[.,]\d+)?\s*%)", "strong"),
     ],
     "attachment_point": [
         (r"attach(?:es|ment)?(?: point)? (?:at|of) ([$\u20ac\u00a3][\d,.]+\s*(?:million|billion|m|bn)?)", "strong"),
@@ -85,26 +85,26 @@ TIER2_PATTERNS = {
     # deleted rather than repaired: an honest None beats a plausible wrong
     # number. Guidance ranges belong in price_guidance / spread_history.
     "spread_risk_margin": [
-        (r"(?:pricing|spread)[^.%]{0,60}?settled[^.%]{0,60}?at ([\d.]+\s*%)", "strong"),
-        (r"priced to pay (?:investors )?an? (?:initial )?risk (?:margin|interest spread) of ([\d.]+\s*%)" + NOT_RANGE + r"", "strong"),
+        (r"(?:pricing|spread)[^.%]{0,60}?settled[^.%]{0,60}?at (\d+(?:[.,]\d+)?\s*%)", "strong"),
+        (r"priced to pay (?:investors )?an? (?:initial )?risk (?:margin|interest spread) of (\d+(?:[.,]\d+)?\s*%)" + NOT_RANGE + r"", "strong"),
         # "settled to offer investors a yield of 2.25%" (Lion I)
         (r"(?:settled|priced|closed) to (?:offer|pay) (?:investors )?an? (?:initial )?"
-         r"(?:yield|coupon|spread|risk margin) of ([\d.]+\s*%)" + NOT_RANGE + r"", "strong"),
-        (r"final(?:ised|ized)? (?:pricing|spread|risk margin)[^.%]{0,30}?([\d.]+\s*%)", "strong"),
+         r"(?:yield|coupon|spread|risk margin) of (\d+(?:[.,]\d+)?\s*%)" + NOT_RANGE + r"", "strong"),
+        (r"final(?:ised|ized)? (?:pricing|spread|risk margin)[^.%]{0,30}?(\d+(?:[.,]\d+)?\s*%)", "strong"),
         # Settlement language first. "guide pricing of 11.25% to 12.25%" used to
         # match the generic form and return the range's LOWER BOUND as if it
         # were the settled spread; the lookahead now rejects range endpoints.
-        (r"(?:pricing|spread)[^.%]{0,60}?settled[^.%]{0,40}?at ([\d.]+\s*%)", "strong"),
-        (r"(?:pricing|spread)[^.%]{0,60}?fixed at ([\d.]+\s*%)", "strong"),
-        (r"(?:priced|pricing) (?:at|of) ([\d.]+\s*%)(?!\s*(?:to|and|[-\u2013])\s*[\d.]+\s*%)", "strong"),
+        (r"(?:pricing|spread)[^.%]{0,60}?settled[^.%]{0,40}?at (\d+(?:[.,]\d+)?\s*%)", "strong"),
+        (r"(?:pricing|spread)[^.%]{0,60}?fixed at (\d+(?:[.,]\d+)?\s*%)", "strong"),
+        (r"(?:priced|pricing) (?:at|of) (\d+(?:[.,]\d+)?\s*%)(?!\s*(?:to|and|[-\u2013])\s*\d+(?:[.,]\d+)?\s*%)", "strong"),
         # Every settled-price anchor rejects a range endpoint. "coupon of
         # 2.25% to 2.5%" returned 2.25% -- right on Lion I by luck only.
-        (r"(?:initial )?risk (?:margin|interest spread) of ([\d.]+\s*%)" + NOT_RANGE + r"", "strong"),
-        (r"priced to pay (?:investors )?a spread of ([\d.]+\s*%)" + NOT_RANGE + r"", "strong"),
-        (r"coupon of ([\d.]+\s*%)" + NOT_RANGE + r"", "strong"),
+        (r"(?:initial )?risk (?:margin|interest spread) of (\d+(?:[.,]\d+)?\s*%)" + NOT_RANGE + r"", "strong"),
+        (r"priced to pay (?:investors )?a spread of (\d+(?:[.,]\d+)?\s*%)" + NOT_RANGE + r"", "strong"),
+        (r"coupon of (\d+(?:[.,]\d+)?\s*%)" + NOT_RANGE + r"", "strong"),
     ],
     "price_guidance": [
-        (r"guidance[^.]{0,80}?([\d.]+\s*%\s*(?:to|and|[-–])\s*[\d.]+\s*%)", "strong"),
+        (r"guidance[^.]{0,80}?(\d+(?:[.,]\d+)?\s*%\s*(?:to|and|[-–])\s*\d+(?:[.,]\d+)?\s*%)", "strong"),
     ],
     "maturity_date": [
         # Closed month vocabulary: an open [A-Z][a-z]+ token happily matched
@@ -121,7 +121,7 @@ TIER2_PATTERNS = {
          r"((?:\w+|\d+)[-\s](?:hurricane seasons|wind seasons|years|year))", "strong"),
     ],
     "payout_floor": [
-        (r"minimum of ([\d.]+\s*%)[^.]{0,40}principal", "strong"),
+        (r"minimum of (\d+(?:[.,]\d+)?\s*%)[^.]{0,40}principal", "strong"),
     ],
 }
 
@@ -271,6 +271,32 @@ def _field(value=None, confidence=None, method=None, evidence=None, flags=None):
         "evidence": evidence,
         "flags": flags or ([] if value is not None else ["not_found"]),
     }
+
+
+def _pct_to_float(raw):
+    """Percentage string -> float, honouring a decimal comma.
+
+    Artemis is inconsistent: "an expected loss of 2,23%" appears alongside
+    "2.92%" on the same page (Kilimanjaro II 2017-1). The old grammar
+    `[\d.]+%` captured only "23" from that, reporting EL=23% against AP=2.92%
+    -- arithmetically impossible, and caught by the EL<=AP invariant.
+
+    Widening the grammar alone made it worse: the captured "2,23" then went
+    through `float(re.sub(r"[^\d.]", "", ...))`, which DELETES the comma and
+    yields 223.0. Capture and conversion had to change together.
+
+    A percentage in this corpus never carries a thousands separator, so a comma
+    is always a decimal point.
+    """
+    if raw is None:
+        return None
+    m = re.search(r"\d+(?:[.,]\d+)?", str(raw))
+    if not m:
+        return None
+    try:
+        return float(m.group(0).replace(",", "."))
+    except ValueError:
+        return None
 
 
 def _money_to_number(text):
@@ -647,9 +673,9 @@ def parse_deal(html, deal_url=None):
     spread_history = []
     for label, text in segments:
         for pattern, kind in [
-            (r"priced to pay (?:investors )?an? (?:initial )?risk margin of ([\d.]+\s*%)", "priced"),
-            (r"guidance[^.]{0,80}?([\d.]+\s*%\s*(?:to|and|[-–])\s*[\d.]+\s*%)", "guidance"),
-            (r"(?:initial )?risk margin of ([\d.]+\s*%)" + NOT_RANGE, "risk_margin"),
+            (r"priced to pay (?:investors )?an? (?:initial )?risk margin of (\d+(?:[.,]\d+)?\s*%)", "priced"),
+            (r"guidance[^.]{0,80}?(\d+(?:[.,]\d+)?\s*%\s*(?:to|and|[-–])\s*\d+(?:[.,]\d+)?\s*%)", "guidance"),
+            (r"(?:initial )?risk margin of (\d+(?:[.,]\d+)?\s*%)" + NOT_RANGE, "risk_margin"),
         ]:
             m = re.search(pattern, text, re.IGNORECASE)
             if m:
@@ -729,7 +755,7 @@ def parse_deal(html, deal_url=None):
         if not raw:
             return None
         try:
-            return float(re.sub(r"[^\d.]", "", raw))
+            return _pct_to_float(raw)
         except ValueError:
             return None
 
@@ -1116,7 +1142,7 @@ def _extract_tranche_metrics(text, ctx):
 
     def num(key):
         v = row[key]
-        return float(re.sub(r"[^\d.]", "", v)) if v else None
+        return _pct_to_float(v)
 
     el, ap, ep = (num("expected_loss"), num("attachment_probability"),
                   num("exhaustion_probability"))
