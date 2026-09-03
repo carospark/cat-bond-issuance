@@ -24,7 +24,7 @@ from fetch import fetch                                    # noqa: E402
 from parse_deal import parse_deal, parse_tranches, _pct_to_float, _money_to_number  # noqa: E402
 from validate import validate                              # noqa: E402
 
-NOT_STATED = {"not_stated", "notstated", "none", "n/a", "-"}
+NOT_STATED = {"not_stated", "notstated", "none", "n/a", "-", "no"}
 
 
 def norm(v, field):
@@ -32,6 +32,8 @@ def norm(v, field):
     if v is None:
         return None
     s = str(v).strip()
+    # "April 9th 2020" and "April 9 2020" are the same date.
+    s = re.sub(r"(\d)(?:st|nd|rd|th)\b", r"\1", s)
     if not s or s.lower() in NOT_STATED:
         return None
     # Free-text Tier-1 fields (agents, perils, modeller) are compared on
@@ -44,7 +46,7 @@ def norm(v, field):
         # space made "Ltd." and "Ltd" differ by whitespace alone.
         return ("raw", re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", s.lower())).strip())
     if "%" in s or field in ("expected_loss", "attachment_probability",
-                             "spread_risk_margin"):
+                             "spread_risk_margin", "principal_loss_pct"):
         n = _pct_to_float(s)
         return ("pct", round(n, 4)) if n is not None else ("raw", s.lower())
     if re.search(r"[$€£¥]|\d", s) and field in ("size", "tranche_size_final"):
