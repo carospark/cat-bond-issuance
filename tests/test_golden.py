@@ -40,7 +40,8 @@ PAGES = [
     "mosaic-re-ii-ltd",                 # stated-multi given single-tranche size
     "triangle-re-2019-1-ltd",           # "$X tranche of Class Y" phrasing
     "residential-reinsurance-2020-limited-series-2020-1",  # predecessor coupon
-    "citrus-re-ltd-series-2014-2",      # same-year sibling contamination
+    "citrus-re-ltd-series-2014-2",
+    "citrus-re-ltd-series-2015-1",           # pilot deal: lifecycle fields      # same-year sibling contamination
     "ibrd-car-jamaica-2026", "floodsmart-re-ltd-series-2024-1",
     "residential-reinsurance-2026-limited-series-2026-1", "seaside-re-series-2026-61",
     "windmill-ii-re-dac-2020", "kilimanjaro-re-ltd-series-2015-1",
@@ -717,7 +718,7 @@ def main():
     # Pin the total. Guards are conditional on extracted data, so a regression
     # that empties a field silently removes its checks and the suite still
     # reports "all passed" on a smaller suite.
-    EXPECTED_CHECKS = 585
+    EXPECTED_CHECKS = 597
     if len(results) != EXPECTED_CHECKS:
         results.append((False, "GUARD check-count",
                         f"expected {EXPECTED_CHECKS} checks, ran {len(results)}"
@@ -740,6 +741,20 @@ def main():
         if slug == "seaside-re-series-2026-61":
             ids = [r["tranche_id"] for r in parse_tranches(rec)]
             check("Class 3" not in ids, "GUARD no-regulatory-class-tranche", str(ids))
+
+        # GUARD: the Citrus lifecycle, as hand-labelled in the pilot. A
+        # documented extension and a total loss had no fields at all until a
+        # human labelled the page and asked where to put them.
+        if slug == "citrus-re-ltd-series-2015-1":
+            lc = {r["tranche_id"]: r for r in parse_tranches(rec)}
+            check(lc["Class B"].get("maturity_extended") == "April 9th 2020",
+                  "EXPECT citrus B extended", str(lc["Class B"].get("maturity_extended")))
+            check(lc["Class C"].get("principal_loss_pct") == 100.0,
+                  "EXPECT citrus C total loss", str(lc["Class C"].get("principal_loss_pct")))
+            check(lc["Class C"].get("maturity_actual") == "March 20th 2019",
+                  "EXPECT citrus C actual maturity", str(lc["Class C"].get("maturity_actual")))
+            check(lc["Class A"].get("maturity_actual") == "April 12th 2018",
+                  "EXPECT citrus A matured", str(lc["Class A"].get("maturity_actual")))
 
     passed = sum(1 for ok, *_ in results if ok)
     for ok, label, detail in results:

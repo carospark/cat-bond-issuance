@@ -869,6 +869,23 @@ def parse_deal(html, deal_url=None):
         (["tier1_placeholders=%d" % len(placeholder_hits)] if placeholder_hits else [])
         + ([] if m_priv else ["not_found"]))
 
+    # Derived entities from the verbatim agents cell. The cell is canonical
+    # ("Willis Capital Markets & Advisory are sole structuring agent and
+    # bookrunner.") but joins and labelling want the names alone. Strip the
+    # role clause, then split coordinated names -- on " and " only, since "&"
+    # binds inside a name.
+    agents_raw = (record["placement_structuring_agents"].get("raw_value")
+                  or record["placement_structuring_agents"]["value"] or "")
+    ent = re.sub(r"\s+(?:are|is)\s+(?:the\s+)?(?:sole|joint)?\s*(?:structuring|"
+                 r"placement|co-)?\s*(?:agents?|bookrunners?|managers?)\b.*$",
+                 "", agents_raw).strip(" .")
+    ents = ([e.strip(" .") for e in re.split(r",| and ", ent) if e.strip(" .")]
+            if ent and ent.lower() not in ("unknown", "?") else [])
+    record["agents_entities"] = _field(
+        ents or None, "medium" if ents else None,
+        "derived:tier1_cell", agents_raw[:80] or None,
+        [] if ents else ["not_found"])
+
     record["_meta"] = {
         "page_flags": page_flags,
         "extra_fields": extra_fields,
@@ -1516,7 +1533,77 @@ def parse_tranches(record):
         row["tranche_flags"] = ";".join(flags)
         rows.append(row)
     _reconcile_tranche_sizes(rows, ctx)
+    apply_tranche_lifecycle(rows, ctx["prose"])
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Tranche lifecycle: extensions, actual maturity, principal loss.
+#
+# Found by hand-labelling, not by review: Citrus Re 2015-1's page records that
+# Class A matured, Classes B and C were "extended to April 9th 2020", and
+# Class C was then "allowed to mature with a balance of zero" -- a documented
+# extension and a total loss -- and the parser had no field for any of it.
+# This is the only place a DEAL PAGE records capital leaving, and it
+# cross-checks against the losses table, which records the same events
+# site-wide.
+# ---------------------------------------------------------------------------
+
+_LC_DATE = (r"((?:" + MONTHS + r")\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}"
+            r"|(?:" + MONTHS + r")\s+\d{4})")
+LC_EXTENDED_RE = re.compile(r"(?:maturit\w+|notes?)?\s*(?:been\s+)?extended"
+                            r"(?:\s+\w+){0,3}?\s+to\s+" + _LC_DATE, re.IGNORECASE)
+LC_ZERO_RE = re.compile(r"balance of zero|total loss of principal|100%\s*loss",
+                        re.IGNORECASE)
+LC_MATURE_RE = re.compile(r"\b(?:let|allowed)\b[^.]{0,60}?\bmature\b|"
+                          r"\bmatured?\b", re.IGNORECASE)
+def apply_tranche_lifecycle(rows, prose):
+    """Fill maturity_extended / maturity_actual / principal_loss_pct in place.
+
+    Clause-scoped: "Heritage has let the ... Class A ... mature, but both the
+    Class B and Class C have had their maturities extended" assigns opposite
+    outcomes within one sentence, so clauses split on but/while/; first.
+    """
+    known = {str(r.get("tranche_id")).upper(): r for r in rows if r.get("tranche_id")}
+    for r in rows:
+        for k in ("maturity_extended", "maturity_actual", "principal_loss_pct",
+                  "loss_basis", "lifecycle_evidence"):
+            r.setdefault(k, None)
+    if not known or not prose:
+        return
+    # _segment_prose_dated already parses each update heading's date; using it
+    # instead of re-deriving here -- a first draft of this function wrote its
+    # own header-date regex against the ordinal labels, which carry no date,
+    # and silently never matched. Same duplicated-derivation class as always.
+    segments, seg_dates = _segment_prose_dated(prose)
+    for label, text in segments:
+        seg_date = seg_dates.get(label)
+        for sent in sentences(text):
+            for clause in re.split(r"\bbut\b|\bwhile\b|;", sent):
+                targets = [known[("Class " + g).upper()]
+                           for g in CLASS_RE.findall(clause)
+                           if ("Class " + g).upper() in known]
+                if not targets:
+                    continue
+                ev = re.sub(r"\s+", " ", clause.strip())[:140]
+                m = LC_EXTENDED_RE.search(clause)
+                if m:
+                    for t in targets:
+                        t["maturity_extended"] = _clean(m.group(1))
+                        t["lifecycle_evidence"] = ev
+                    continue
+                if LC_ZERO_RE.search(clause):
+                    for t in targets:
+                        t["principal_loss_pct"] = 100.0
+                        t["loss_basis"] = "stated"
+                        t["maturity_actual"] = t["maturity_actual"] or seg_date
+                        t["lifecycle_evidence"] = ev
+                    continue
+                if LC_MATURE_RE.search(clause) and not re.search(
+                        r"extend|will mature|scheduled|expected", clause, re.IGNORECASE):
+                    for t in targets:
+                        t["maturity_actual"] = t["maturity_actual"] or seg_date
+                        t["lifecycle_evidence"] = t["lifecycle_evidence"] or ev
 
 
 def check_tranche_sum(record, rows):

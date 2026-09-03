@@ -72,8 +72,13 @@ def main():
 
         for _, r in grp.iterrows():
             if r.level == "deal":
-                got = rec.get(r.field, {}).get("value") if isinstance(
-                    rec.get(r.field), dict) else None
+                f = rec.get(r.field)
+                got = f.get("value") if isinstance(f, dict) else None
+                # Verbatim is canonical: the parser maps "Unknown"/"?" to None
+                # while keeping the cell in raw_value. A labeller reading the
+                # page writes the cell. Those agree, and must score as a match.
+                if got is None and isinstance(f, dict) and f.get("raw_value"):
+                    got = f["raw_value"]
             else:
                 # Match the labeller's slot to a parsed tranche by its ID, which
                 # the labeller supplied; slot order is not assumed to agree.
