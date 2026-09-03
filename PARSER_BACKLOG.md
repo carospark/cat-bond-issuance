@@ -87,6 +87,20 @@ captures, or coupon-including-collateral-yield phrasings. Start: list emitted
 spreads for 2019 and 2023 against their pages; compare an issuance-weighted
 mean; check mortgage-ILS SOFR-plus coupons.
 
+## 10. size_change series not analysis-grade (~1 evening, blocks a demand proxy)
+
+The offering-size-changes dashboard comparison FAILED: corr 0.10-0.22 against
+the publisher under three definitions (per-deal mean, incl-zero mean,
+dollar-weighted). Two causes to separate: their metric definition is unknown
+(90% quarters with our n=2 suggest theirs may include deals ours misses, or a
+different base), and our launch column is noisy - dollar-weighted quarters at
+-43% / -57% mean launch values EXCEED finals at scale, consistent with the 75
+tranche_sum_launch violations. This is the day-one demand-proxy signal, so
+worth fixing: start from the biggest negative quarters (Q2 2025, Q4 2025,
+Q2 2021) and read those deals' launch values against their pages.
+`src/validate_dashboards.py` + `data/validation_dashboards/size_change.csv`
+reproduce the failure.
+
 ## Standing rules (hard-won, do not relearn)
 
 - Honest `None` beats a plausible wrong value; delete weak patterns, don't
