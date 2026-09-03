@@ -64,7 +64,11 @@ NOT_RANGE = r"(?!\s*(?:to|and|[-\u2013])\s*\d+(?:[.,]\d+)?\s*%)"
 TIER2_PATTERNS = {
     "expected_loss": [
         (r"(?:initial )?expected loss of (?:approximately |around |about )?(\d+(?:[.,]\d+)?\s*%)", "strong"),
-        (r"expected loss[^.%]{0,30}?(\d+(?:[.,]\d+)?\s*%)", "weak"),
+        # A % followed by of/for is a SHARE of the expected loss ("New York
+        # 42.7% of expected losses", "99.55% for the Class A notes"), not the
+        # loss itself. Only the weak fallback needs the guard: the strong
+        # forms put "of" before the number.
+        (r"expected loss[^.%]{0,30}?(\d+(?:[.,]\d+)?\s*%)(?!\s*(?:of|for)\b)", "weak"),
     ],
     "attachment_probability": [
         (r"attachment probability (?:for the notes )?(?:of|is|at|to be) "
@@ -178,6 +182,10 @@ NEGATED_RESIZE_RE = re.compile(
     r"\bremained?\s+(?:at|the same)\b|\bsame size\b", re.IGNORECASE)
 
 
+TRANCHE_LAYER_RE = re.compile(
+    r"Class\s+[A-Z0-9-]{1,4}\s+layer|layer\s+tranche", re.IGNORECASE)
+
+
 def _governed_by_loss_level(text, start, end):
     """True if this amount is NOT usable as a size.
 
@@ -193,7 +201,17 @@ def _governed_by_loss_level(text, start, end):
     must not make it worse. The veto regexes are kept as a belt-and-braces
     first check since they are strictly narrower than the classifier.
     """
-    if LOSS_LEVEL_RE.search(text[max(0, start - 45):end + 45]):
+    window = text[max(0, start - 45):end + 45]
+    # "layer" is overloaded: "$2.5 billion layer" is a loss level, but Artemis
+    # also calls a tranche itself a layer -- "the Class B layer tranche remains
+    # with a target of $25 million". Bound to a class label, with no other
+    # loss-level word present, it is a tranche noun and the amount is a size.
+    # Checked FIRST because the classifier branch below also cues on "layer".
+    if (TRANCHE_LAYER_RE.search(window)
+            and not re.search(r"deductible|attach|exhaust|retention",
+                              window, re.IGNORECASE)):
+        return False
+    if LOSS_LEVEL_RE.search(window):
         return True
     if (LAYER_RE.search(text[end:end + 12])
             or LAYER_RE.search(text[max(0, start - 25):start])):
@@ -484,6 +502,13 @@ def _is_backward_reference(sentence, issue_year, own_series=frozenset()):
                for y in re.findall(r"\b(19\d\d|20\d\d)\b", main_clause))
 
 
+# Percent fields where a "medical benefit ratio" percentage is a different
+# unit entirely (Vitality's health deals attach at ~96-102% MBR) and must not
+# be captured as a probability or a loss.
+BENEFIT_RATIO_RE = re.compile(r"benefit ratio", re.IGNORECASE)
+RATIO_GUARDED = {"expected_loss", "attachment_probability", "exhaustion_probability"}
+
+
 def _apply_patterns(name, patterns, text, issue_year=None, own_series=frozenset()):
     """Run every pattern, collect distinct candidates, and grade the result."""
     hits, strength_used = [], None
@@ -491,6 +516,10 @@ def _apply_patterns(name, patterns, text, issue_year=None, own_series=frozenset(
     for pattern, strength in patterns:
         for m in re.finditer(pattern, text, re.IGNORECASE):
             value = _clean(m.group(1))
+            if (name in RATIO_GUARDED
+                    and BENEFIT_RATIO_RE.search(text[max(0, m.start() - 45):m.start()])):
+                dropped.append(value + " (benefit ratio)")
+                continue
             if _is_backward_reference(_sentence_at(text, m.start()), issue_year, own_series):
                 dropped.append(value)
                 continue
@@ -984,6 +1013,9 @@ TRANCHE_SIZE_RES = [(re.compile(x, re.IGNORECASE), k) for x, k in (
      r"\s+(?:to|at|as)\s+(?:up to |between )?" + _M, "stated"),
     # "targeting at least $75 million", "aiming for $150m", "seeking $X"
     (r"(?:target\w*|aim\w*|seek\w*|sought)\s+(?:for\s+|at\s+least\s+|up\s+to\s+)?" + _M, "stated"),
+    # "remains with a target of $25 million" -- Blue Halo's Class B stayed
+    # invisible while the deal's upsized total leaked into its window.
+    (r"target of " + _M, "stated"),
     (_M + r"\s+Class\s+[A-Z0-9]+", "stated"),
     (r"(?:tranche|notes)[^.]{0,40}?of " + _M, "stated"),
     # "$134,574,000 tranche of Class M-1 notes" -- amount precedes the noun.
@@ -1359,8 +1391,13 @@ def _size_multi(label, text, ctx):
         # sits outside its window entirely.
         # Use the prebuilt map, which also carries shared-subject "each"
         # distributions that a direct rescan of the prose would miss.
-        sizes = [(v, "stated") for v in
-                 (ctx.get("bindings") or {}).get((label or "").upper(), [])]
+        cand = (ctx.get("bindings") or {}).get((label or "").upper(), [])
+        sizes = []
+        for v in cand:
+            n = v if isinstance(v, (int, float)) else _money_to_number(str(v))
+            if n and ctx.get("deal_total") and abs(n - ctx["deal_total"]) / ctx["deal_total"] <= 0.01:
+                continue                    # the deal total is never one tranche
+            sizes.append((v, "stated"))
         if sizes:
             extra.append("size_from_label_binding")
     if not sizes and dropped:

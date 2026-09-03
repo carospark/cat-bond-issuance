@@ -34,6 +34,8 @@ PAGES = [
     "radnor-re-2020-2-ltd", "trinity-re-ltd",
     "home-re-2022-1-ltd",                    # five classes in a rating listing
     "kilimanjaro-ii-re-ltd-series-2017-1",   # decimal-comma percentages
+    "blue-halo-re-ltd-series-2020-1",        # "Class B layer tranche" = tranche noun
+    "east-lane-re-vi-ltd-series-2014-1",     # "42.7% of expected losses" = a share
     # Pages that each exposed a wrong output in adversarial review.
     "atlantic-western-re-ltd",          # lowercase "class A" labels
     "hoplon-ii-insurance-ltd",          # guidance endpoint sold as settled
@@ -155,6 +157,12 @@ TRANCHE_SIZES = {
     "residential-reinsurance-2020-limited-series-2020-1": {
         "Class 13": ("$100 million", "$100 million"),
     },
+    # The tranche called a "layer": both its $25m statements were vetoed as
+    # loss levels and the deal total backfilled in their place.
+    "blue-halo-re-ltd-series-2020-1": {
+        "Class A": ("$75 million", "$150 million"),
+        "Class B": ("$25 million", "$25 million"),
+    },
     # Enumerated as "$159.8 million Class M-1A (DBRS rated ...) $53.3 million
     # Class M-1B (...)": the word "tranche" appears once at the head of the
     # list, so requiring note-wording near every label found only two of five.
@@ -228,6 +236,11 @@ REJECT = {
     "hoplon-ii-insurance-ltd": {"spread_risk_margin": "11.25%"},
     # $200m/$350m are the Citrus 2014-1 layer bounds, not 2014-2's
     "citrus-re-ltd-series-2014-2": {"attachment_point": "$200m"},
+    # "New York 42.7% of expected losses" is a geographic SHARE of the EL.
+    "east-lane-re-vi-ltd-series-2014-1": {"expected_loss": "42.7%"},
+    # Medical benefit ratios (~96-102%) are a different unit, never EL/AP.
+    "vitality-re-v-ltd-series-2014-1": {"expected_loss": "99.55%",
+                                        "attachment_probability": "96%"},
     # A cancelled deal must never report issued principal.
     "gateway-re-ltd-series-2024-3": {"size": "$100 million"},
     # "coupon of 2.25% to 2.5%" is a range; 2.25% must come from the settled
@@ -718,7 +731,7 @@ def main():
     # Pin the total. Guards are conditional on extracted data, so a regression
     # that empties a field silently removes its checks and the suite still
     # reports "all passed" on a smaller suite.
-    EXPECTED_CHECKS = 597
+    EXPECTED_CHECKS = 626
     if len(results) != EXPECTED_CHECKS:
         results.append((False, "GUARD check-count",
                         f"expected {EXPECTED_CHECKS} checks, ran {len(results)}"
