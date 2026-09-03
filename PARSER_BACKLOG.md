@@ -77,6 +77,16 @@ and the labeller writes the verbatim cell, not the extracted entity.
 ~12 deals stratified by decade ≈ 2 hours; `src/build_labelling_set.py` then
 `src/score_labels.py`.
 
+## 9. Spread series bias (~1 evening, found by dashboard validation)
+
+Our yearly average spread runs +2-4pp above the publisher's in 2019-2020 and
+2023-2025 while matching in 2021/2026. EL matches at corr 0.93, so it is the
+spread column specifically. Candidates: selection (we only emit spread when
+prose states it, skewing to riskier narrated deals), residual price-vs-spread
+captures, or coupon-including-collateral-yield phrasings. Start: list emitted
+spreads for 2019 and 2023 against their pages; compare an issuance-weighted
+mean; check mortgage-ILS SOFR-plus coupons.
+
 ## Standing rules (hard-won, do not relearn)
 
 - Honest `None` beats a plausible wrong value; delete weak patterns, don't

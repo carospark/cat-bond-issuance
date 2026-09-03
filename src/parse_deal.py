@@ -68,7 +68,12 @@ TIER2_PATTERNS = {
         # 42.7% of expected losses", "99.55% for the Class A notes"), not the
         # loss itself. Only the weak fallback needs the guard: the strong
         # forms put "of" before the number.
-        (r"expected loss[^.%]{0,30}?(\d+(?:[.,]\d+)?\s*%)(?!\s*(?:of|for)\b)", "weak"),
+        # ...and "lines contribute the largest percentage to the deals expected
+        # loss, at 61.3%" / "Area B contributes 22.6%" are CONTRIBUTIONS to the
+        # EL, not the EL. Any contribution wording between the cue and the
+        # number disqualifies the capture.
+        (r"expected loss(?:(?!contribut)[^.%]){0,30}?(\d+(?:[.,]\d+)?\s*%)"
+         r"(?!\s*(?:of|for)\b)", "weak"),
     ],
     "attachment_probability": [
         (r"attachment probability (?:for the notes )?(?:of|is|at|to be) "
@@ -100,7 +105,11 @@ TIER2_PATTERNS = {
         # were the settled spread; the lookahead now rejects range endpoints.
         (r"(?:pricing|spread)[^.%]{0,60}?settled[^.%]{0,40}?at (\d+(?:[.,]\d+)?\s*%)", "strong"),
         (r"(?:pricing|spread)[^.%]{0,60}?fixed at (\d+(?:[.,]\d+)?\s*%)", "strong"),
-        (r"(?:priced|pricing) (?:at|of) (\d+(?:[.,]\d+)?\s*%)(?!\s*(?:to|and|[-\u2013])\s*\d+(?:[.,]\d+)?\s*%)", "strong"),
+        # "priced at 91.5% of the original principal amount" is a DISCOUNT
+        # PRICE, not a spread. Reject when the percent is of principal/par/face.
+        (r"(?:priced|pricing) (?:at|of) (\d+(?:[.,]\d+)?\s*%)"
+         r"(?!\s*(?:to|and|[-\u2013])\s*\d+(?:[.,]\d+)?\s*%)"
+         r"(?!\s*of\s+(?:the\s+)?(?:original\s+)?(?:principal|par|face))", "strong"),
         # Every settled-price anchor rejects a range endpoint. "coupon of
         # 2.25% to 2.5%" returned 2.25% -- right on Lion I by luck only.
         (r"(?:initial )?risk (?:margin|interest spread) of (\d+(?:[.,]\d+)?\s*%)" + NOT_RANGE + r"", "strong"),
@@ -519,6 +528,14 @@ def _apply_patterns(name, patterns, text, issue_year=None, own_series=frozenset(
             if (name in RATIO_GUARDED
                     and BENEFIT_RATIO_RE.search(text[max(0, m.start() - 45):m.start()])):
                 dropped.append(value + " (benefit ratio)")
+                continue
+            # "lines of business contribute the largest percentage to the
+            # deals expected loss, at 61.3%": contribution wording BEFORE the
+            # cue, so the between-cue-and-number guard cannot see it.
+            if (name == "expected_loss"
+                    and re.search(r"contribut", text[max(0, m.start() - 80):m.start()],
+                                  re.IGNORECASE)):
+                dropped.append(value + " (contribution share)")
                 continue
             if _is_backward_reference(_sentence_at(text, m.start()), issue_year, own_series):
                 dropped.append(value)
