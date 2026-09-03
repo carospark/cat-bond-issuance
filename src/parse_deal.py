@@ -989,6 +989,19 @@ CLASS_RE = re.compile(r"\bClass\s+([A-Z]{1,3}-\d+[A-Z]?|[A-Z]{1,3}\b|\d{1,2}\b)"
 CLASS_CONTEXT_RE = re.compile(
     r"(?:notes?|tranche|securities|bonds?)", re.IGNORECASE)
 
+# A money amount immediately BEFORE a class label, or a rating immediately
+# after it, is decisive evidence of a tranche on its own. Pages enumerate them
+# that way -- "$159.8 million Class M-1A (DBRS rated BBB) $53.3 million Class
+# M-1B (...)" -- with the word "tranche" appearing once at the head of the
+# list. Requiring note/tranche wording near EVERY label dropped four of Home Re
+# 2022-1's five classes.
+CLASS_EVIDENCE_RE = re.compile(
+    r"[$\u20ac\u00a3\u00a5][\d,.]+\s*(?:m|million|bn|billion)?\s*$",
+    re.IGNORECASE)
+CLASS_RATING_RE = re.compile(
+    r"^\s*\(?(?:DBRS|Moody|Fitch|S&P|Standard|KBRA|AM Best)|^\s*\(?rated\b",
+    re.IGNORECASE)
+
 REGULATORY_CLASS_RE = re.compile(
     r"\s+(?:Bermuda|insurer|reinsurer|licen[cs]e|regulated|segregated)", re.IGNORECASE)
 
@@ -1063,7 +1076,11 @@ def _tranche_windows(prose):
     for label, ms in by_label.items():
         for m in ms:
             window = prose[max(0, m.start() - 60):m.end() + 60]
-            if CLASS_CONTEXT_RE.search(window):
+            before = prose[max(0, m.start() - 30):m.start()]
+            after = prose[m.end():m.end() + 30]
+            if (CLASS_CONTEXT_RE.search(window)
+                    or CLASS_EVIDENCE_RE.search(before)
+                    or CLASS_RATING_RE.search(after)):
                 real.add(label)
                 break
     hits = [m for m in hits if "Class " + m.group(1).upper() in real]

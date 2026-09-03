@@ -32,6 +32,7 @@ PAGES = [
     # Radnor: mortgage-ILS suffixed class labels (M-1A vs M-1).
     # Trinity: prose states a count it never breaks down -- must be flagged.
     "radnor-re-2020-2-ltd", "trinity-re-ltd",
+    "home-re-2022-1-ltd",                    # five classes in a rating listing
     "kilimanjaro-ii-re-ltd-series-2017-1",   # decimal-comma percentages
     # Pages that each exposed a wrong output in adversarial review.
     "atlantic-western-re-ltd",          # lowercase "class A" labels
@@ -152,6 +153,16 @@ TRANCHE_SIZES = {
     # so the no-tranche-equals-the-total rule must not suppress it.
     "residential-reinsurance-2020-limited-series-2020-1": {
         "Class 13": ("$100 million", "$100 million"),
+    },
+    # Enumerated as "$159.8 million Class M-1A (DBRS rated ...) $53.3 million
+    # Class M-1B (...)": the word "tranche" appears once at the head of the
+    # list, so requiring note-wording near every label found only two of five.
+    "home-re-2022-1-ltd": {
+        "Class M-1A": ("$159.8 million", "$159.8 million"),
+        "Class M-1B": ("$53.3 million", "$53.3 million"),
+        "Class M-1C": ("$183.5 million", "$183.5 million"),
+        "Class M-2": ("$47.4 million", "$47.4 million"),
+        "Class B-1": ("$29.6 million", "$29.6 million"),
     },
     # Five classes in ONE semicolon-separated sentence; four sizes were lost.
     "radnor-re-2020-2-ltd": {
@@ -706,7 +717,7 @@ def main():
     # Pin the total. Guards are conditional on extracted data, so a regression
     # that empties a field silently removes its checks and the suite still
     # reports "all passed" on a smaller suite.
-    EXPECTED_CHECKS = 559
+    EXPECTED_CHECKS = 585
     if len(results) != EXPECTED_CHECKS:
         results.append((False, "GUARD check-count",
                         f"expected {EXPECTED_CHECKS} checks, ran {len(results)}"
@@ -722,6 +733,13 @@ def main():
             if el and ap:
                 check(el <= ap, f"GUARD EL<=AP {slug}:{r['tranche_id']}",
                       f"EL={el} AP={ap}")
+
+        # GUARD: a regulatory class is not a tranche. Seaside's page says
+        # "Class 3 Bermuda-based insurer"; that phantom equalled the deal total
+        # so the sum check was validating an invented structure.
+        if slug == "seaside-re-series-2026-61":
+            ids = [r["tranche_id"] for r in parse_tranches(rec)]
+            check("Class 3" not in ids, "GUARD no-regulatory-class-tranche", str(ids))
 
     passed = sum(1 for ok, *_ in results if ok)
     for ok, label, detail in results:
