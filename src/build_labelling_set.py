@@ -33,11 +33,22 @@ N = int(sys.argv[1]) if len(sys.argv) > 1 else 12
 # large majority; a deal with more is rare and can be noted in `note`.
 TRANCHE_SLOTS = int(sys.argv[2]) if len(sys.argv) > 2 else 4
 
-DEAL_FIELDS = [
-    "size", "cedent_sponsor", "date_of_issue", "trigger_type",
+# ALL nine "At a glance" fields, then the prose-mined ones.
+#
+# The first draft labelled only the fields already believed to be error-prone
+# and skipped most of Tier 1 as reliable. That is the assumption ground truth
+# exists to test: mean Tier-1 fill is 7.8/9, and nothing currently separates
+# "the page did not say" from "we missed it".
+TIER1_FIELDS = [
+    "issuer", "cedent_sponsor", "placement_structuring_agents",
+    "risk_modeller", "perils_covered", "size", "trigger_type",
+    "ratings", "date_of_issue",
+]
+TIER2_FIELDS = [
     "expected_loss", "attachment_probability", "spread_risk_margin",
     "maturity_scheduled", "term_length",
 ]
+DEAL_FIELDS = TIER1_FIELDS + TIER2_FIELDS
 TRANCHE_FIELDS = [
     "tranche_id", "tranche_size_final", "expected_loss",
     "attachment_probability", "spread_risk_margin",

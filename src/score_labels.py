@@ -34,6 +34,13 @@ def norm(v, field):
     s = str(v).strip()
     if not s or s.lower() in NOT_STATED:
         return None
+    # Free-text Tier-1 fields (agents, perils, modeller) are compared on
+    # normalised text: they are prose, not quantities, and an exact string
+    # match would score a correct value as wrong over a comma.
+    if field in ("placement_structuring_agents", "perils_covered",
+                 "risk_modeller", "issuer", "cedent_sponsor", "ratings",
+                 "trigger_type", "date_of_issue"):
+        return ("raw", re.sub(r"[^a-z0-9 ]", " ", s.lower()))
     if "%" in s or field in ("expected_loss", "attachment_probability",
                              "spread_risk_margin"):
         n = _pct_to_float(s)
