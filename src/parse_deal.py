@@ -112,13 +112,16 @@ TIER2_PATTERNS = {
         # nonsense at medium confidence. A fixed alternation cannot.
         (r"matur\w+[^.]{0,40}?(" + MONTHS + r"\s+\d{4})", "strong"),
     ],
+    # NOTE: \d+ does not cross a decimal point, so "a 12.5-year term" matched
+    # the "5" and reported a 5-year term. Ground-truth labelling caught this;
+    # no invariant could, because 5 years is a perfectly plausible term.
     "term_length": [
         # "a three-year term" puts the number *before* the anchor, so the
         # original forward-looking pattern could never see it.
-        (r"((?:\w+|\d+)[-\s](?:year|month)s?)\s+term", "strong"),
-        (r"term of ((?:\w+|\d+)[-\s](?:year|month)s?)", "strong"),
+        (r"((?:\w+|\d+(?:\.\d+)?)[-\s](?:year|month)s?)\s+term", "strong"),
+        (r"term of ((?:\w+|\d+(?:\.\d+)?)[-\s](?:year|month)s?)", "strong"),
         (r"(?:term|covering|run(?:ning)? across)[^.]{0,30}?"
-         r"((?:\w+|\d+)[-\s](?:hurricane seasons|wind seasons|years|year))", "strong"),
+         r"((?:\w+|\d+(?:\.\d+)?)[-\s](?:hurricane seasons|wind seasons|years|year))", "strong"),
     ],
     "payout_floor": [
         (r"minimum of (\d+(?:[.,]\d+)?\s*%)[^.]{0,40}principal", "strong"),

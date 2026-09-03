@@ -40,7 +40,9 @@ def norm(v, field):
     if field in ("placement_structuring_agents", "perils_covered",
                  "risk_modeller", "issuer", "cedent_sponsor", "ratings",
                  "trigger_type", "date_of_issue"):
-        return ("raw", re.sub(r"[^a-z0-9 ]", " ", s.lower()))
+        # Collapse runs after stripping punctuation: replacing "." with a
+        # space made "Ltd." and "Ltd" differ by whitespace alone.
+        return ("raw", re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", s.lower())).strip())
     if "%" in s or field in ("expected_loss", "attachment_probability",
                              "spread_risk_margin"):
         n = _pct_to_float(s)
@@ -48,7 +50,9 @@ def norm(v, field):
     if re.search(r"[$€£¥]|\d", s) and field in ("size", "tranche_size_final"):
         n = _money_to_number(s)
         return ("money", round(n, 2)) if n else ("raw", s.lower())
-    return ("raw", re.sub(r"\s+", " ", s).strip().lower())
+    # Generic fallback also normalises punctuation: "12.5-year" and "12.5 year"
+    # are the same term, and a hyphen is not a disagreement.
+    return ("raw", re.sub(r"\s+", " ", re.sub(r"[^a-z0-9.% ]", " ", s.lower())).strip())
 
 
 def main():
@@ -105,9 +109,11 @@ def main():
     silent = df[df.wrong & ~df.deal_flagged]
     print("\n  SILENT ERRORS (wrong, and the deal passed validation): %d of %d wrong"
           % (len(silent), max(df.wrong.sum(), 1)))
-    for _, x in silent.head(10).iterrows():
-        print("     %-34s %-24s truth=%-16r got=%r"
-              % (x.deal[:34], x.field, str(x.truth)[:16], str(x.got)[:16]))
+    for _, x in silent.iterrows():
+        print("     %s / %s" % (x.deal[:30], x.field))
+        print("        truth: %r" % str(x.truth))
+        print("        got  : %r" % str(x.got))
+        print("        cmp  : %r  vs  %r" % (x.t, x.g))
 
     print("\n=== does a violation predict a wrong value? ===")
     per = df.groupby("deal").agg(any_wrong=("wrong", "any"),
@@ -121,7 +127,8 @@ def main():
     g = df.groupby("field").agg(n=("field", "size"), emitted=("emitted", "sum"),
                                 correct=("correct", "sum"), wrong=("wrong", "sum"),
                                 missed=("missed", "sum"))
-    g["precision"] = (100 * g.correct / g.emitted.replace(0, pd.NA)).round(0)
+    g["precision"] = (100 * g.correct.astype(float)
+                      / g.emitted.astype(float).replace(0, float("nan"))).round(0)
     print(g.sort_values("wrong", ascending=False).to_string())
 
 
