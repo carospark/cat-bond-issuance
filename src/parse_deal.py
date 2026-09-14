@@ -168,6 +168,13 @@ SIZING_CTX_RE = re.compile(
 # launch reads "comes out of the blocks at $300m in size, split into two
 # tranches", which is deal-scoped despite naming them.
 CLASS_SCOPED_RE = re.compile(r"\bClass\s+[A-Z0-9]", re.IGNORECASE)
+# "An also $75 million tranche of Cklass B notes" (Herbie 2020-2, sic): the
+# label detector cannot read a typo, but "tranche of <word> <letter> notes"
+# is a labelled component whatever the word. NOT plain "tranche of notes":
+# single-tranche deals ("will issue a $50 million tranche of notes", Seaside)
+# state their deal size that way, and a first draft of this rule threw away
+# 87 launch states.
+TRANCHE_OF_RE = re.compile(r"\btranche of (?:\w+ )?[A-Z](?:-\d+)? notes\b")
 
 # Money governed by a loss-level noun is never a SIZE. Finca's "$15 million
 # event deductible" became the deal's launch size and a +400% phantom upsize.
@@ -181,6 +188,29 @@ LOSS_LEVEL_RE = re.compile(
 # not sizes. Checked in a TIGHT window: a +-45 test on "layer" vetoed Citrus's
 # genuine "$50m of notes, but this higher layer ..." sentence.
 LAYER_RE = re.compile(r"\b(?:layer|tower)\b", re.IGNORECASE)
+
+# A sentence sizing what the sponsor will hold AFTER this deal, or ACROSS
+# several deals, is not sizing this deal. FloodSmart 2020-1's "at least $1.1
+# billion of ... coverage after this deal is issued" and Kilimanjaro III
+# 2026-2's "Across the two series offered ... targeting at least $530 million"
+# both became launch sizes and 50-60% phantom downsizes. Sentence-level on
+# purpose: the cue sits a clause away from the amount.
+CUMULATIVE_RE = re.compile(
+    r"after this (?:deal|transaction|issuance)|"
+    r"bringing (?:its|the|their) (?:total|outstanding)|"
+    r"across (?:the |its |all )?(?:two|three|four|both|multiple|several|twin|"
+    r"pair of) (?:series|deals|transactions)|"
+    r"\bboth series\b|deal directory entries", re.IGNORECASE)
+
+# "That suggests the maximum size of this cat bond would be $150 million"
+# (Power Protective 2021-1, whose page also says "we do not know the size");
+# "That could suggest a maximum size of $400 million" (PoleStar 2024-3, whose
+# actual launch was $75m). Artemis speculation about a ceiling is not a state
+# of the deal.
+SPECULATIVE_SIZE_RE = re.compile(
+    r"\b(?:suggest\w*|could|might|would|may|potential(?:ly)?)\b[^.]{0,80}\bmaximum\b|"
+    r"\bmaximum\b[^.]{0,80}\b(?:suggest\w*|could|might|would|may)\b|"
+    r"\bcould grow to\b", re.IGNORECASE)
 
 # "did not change in size" matched RESIZE_RE (change, size) and was accepted as
 # evidence FOR a resize. Negation must be checked before corroboration.
@@ -345,6 +375,21 @@ def _money_to_number(text):
     return num * MULTIPLIER.get(unit, 1.0)
 
 
+UNIT_RE = re.compile(r"million|billion|bn|\d\s*[mb]\b|\d[mb]\b", re.IGNORECASE)
+
+
+def unit_missing(money_text):
+    """True for "$473.18" (Radnor 2019-1): a money cell whose unit was lost.
+
+    One derivation, shared by the Tier-1 flag and net_supply's USD conversion.
+    Read as dollars it made the deal shrink 100% and its tranches sum to
+    100,000x the total. The verbatim is kept; only the number is refused.
+    """
+    return bool(money_text and MONEY_RE.search(money_text)
+                and not UNIT_RE.search(money_text)
+                and (_money_to_number(money_text) or 0) < 1e4)
+
+
 def _normalise_placeholder(value):
     """Map a source placeholder to None, preserving the raw string."""
     if value is not None and value.strip().lower().rstrip(".") in PLACEHOLDERS:
@@ -469,8 +514,29 @@ def _sentence_at(text, pos):
 
 
 def _series_tokens(text):
-    """Series identifiers like 2024-1 / 2015-2 mentioned in text."""
-    return set(re.findall(r"\b((?:19|20)\d\d-\d+[A-Za-z]?)\b", text or ""))
+    """Series identifiers like 2024-1 / 2015-2 / 2023-A mentioned in text.
+
+    Upper-cased so a slug's "2023-a" and the prose's "Series 2023-A" agree.
+    Isosceles 2023-A/C/G is one entry for three letter-named series; unseen,
+    its "across three series" read as another deal's total.
+    """
+    out = {t.upper() for t in
+           re.findall(r"\b((?:19|20)\d\d-\d+[A-Za-z]?)\b", text or "")}
+    # Letter series enumerate: "(Series 2023-A, C, G)" / slug "2023-a-c-g".
+    for year, first, rest in re.findall(
+            r"\b((?:19|20)\d\d)-([A-Za-z])((?:(?:,\s*|-)[A-Za-z]\b)*)", text or ""):
+        for letter in [first] + re.findall(r"[A-Za-z]", rest):
+            out.add(f"{year}-{letter.upper()}")
+    return out
+
+
+def _cites_only_foreign_series(sentence, own_series):
+    """True if the sentence names another series of the programme and none of
+    this deal's own. "(Series 2018-1)" after an issuer name counts; other
+    parentheticals are asides and are ignored, as in _is_backward_reference."""
+    cited = _series_tokens(re.sub(r"\((?!\s*Series\b)[^)]*\)", " ", sentence))
+    own = set(own_series)
+    return bool(own and cited and (cited - own) and not (cited & own))
 
 
 def _is_backward_reference(sentence, issue_year, own_series=frozenset()):
@@ -494,7 +560,9 @@ def _is_backward_reference(sentence, issue_year, own_series=frozenset()):
     # live there -- ResRe 2026 says its deductible "is higher than the $50
     # million in USAA's 2025-1 aggregate cat bonds" -- and excluding the whole
     # sentence on that basis threw away THIS deal's $150m launch size with it.
-    main_clause = re.sub(r"\([^)]*\)", " ", sentence)
+    # "(Series 2022-1)" after an issuer name is part of the NAME, not an
+    # aside: stripping it let Sanders Re III 2022-2 adopt 2022-1's $550m.
+    main_clause = re.sub(r"\((?!\s*Series\b)[^)]*\)", " ", sentence)
     cited = _series_tokens(main_clause)
     if cited and own_series and (cited - set(own_series)):
         return True
@@ -608,6 +676,8 @@ def parse_deal(html, deal_url=None):
                     "tier1_label", label,
                     ph_flags or ([] if value else ["empty_label_value"]))
                 f["raw_value"] = value
+                if key == "size" and unit_missing(normalised):
+                    f["flags"].append("unit_missing")
                 record[key] = f
 
     # ---- Tier 2 ----------------------------------------------------------
@@ -637,14 +707,14 @@ def parse_deal(html, deal_url=None):
     # Guidance, attachment point and the spread series are TRANCHE facts. On a
     # multi-tranche page the deal-level column silently held tranche 1's value
     # (IBRD 111-112: guidance = Class B's 12.25-13%, spread = Class A's 6.9%).
-    n_windows = len(_tranche_windows(prose)) if prose else 0
+    n_windows = len(_tranche_windows(prose, issue_year, own_series)) if prose else 0
     if n_windows > 1:
         for name in ("price_guidance", "attachment_point"):
             record[name] = _field(flags=["not_found", "tranche_level_only:n=%d" % n_windows])
     headline_ccy = _currency(record["size"]["value"] or "")
 
     # ---- Time series: how terms moved while marketing --------------------
-    size_history, skipped_backref = [], 0
+    size_history, skipped_backref, shared_across_series = [], 0, False
     for label, text in segments:
         for sentence in sentences(text):
             if _is_backward_reference(sentence, issue_year, own_series):
@@ -653,8 +723,18 @@ def parse_deal(html, deal_url=None):
                 continue  # figure belongs to a predecessor deal
             if not SIZING_CTX_RE.search(sentence):
                 continue  # money here is not a deal size
-            if CLASS_SCOPED_RE.search(sentence):
+            if CLASS_SCOPED_RE.search(sentence) or TRANCHE_OF_RE.search(sentence):
                 continue  # a tranche's size, not the deal's
+            m_cum = CUMULATIVE_RE.search(sentence)
+            if m_cum:
+                across_series = bool(re.search(r"series|directory", m_cum.group(0), re.I))
+                if across_series and len(own_series) >= 2:
+                    pass  # Everglades 2023-1/2023-2 is ONE entry for both series
+                else:
+                    shared_across_series |= across_series
+                    continue  # what the sponsor holds after/across deals
+            if SPECULATIVE_SIZE_RE.search(sentence):
+                continue  # a ceiling Artemis guessed at, not a state
             # "$90 million (EUR 80m)": one amount and its conversion. Count
             # the native figure only, but prefer whichever currency the
             # Tier-1 headline uses so launch and final are comparable.
@@ -713,6 +793,10 @@ def parse_deal(html, deal_url=None):
         "%d mention(s)" % len(other) if other else None,
         ["not_note_principal"] if other else ["not_found"])
     sh_flags = [] if size_history else ["not_found"]
+    if shared_across_series and not any(s["state"] == "launch" for s in size_history):
+        # Everest's twin Kilimanjaro series state ONE target across both.
+        # Halving it is arithmetic the page never did; say why launch is empty.
+        sh_flags.append("launch_target_shared_across_series")
     if skipped_backref:
         sh_flags.append("foreign_deal_reference_excluded=%d_sentence(s)" % skipped_backref)
     record["size_history"] = _field(
@@ -740,6 +824,8 @@ def parse_deal(html, deal_url=None):
     final_size = record["size"]["value"]
     launch = next((s for s in size_history if s["state"] == "launch"), None)
     change = None
+    if "unit_missing" in record["size"]["flags"]:
+        final_size = None
     if final_size and launch:
         a, b = _money_to_number(launch["value"]), _money_to_number(final_size)
         cur_a, cur_b = _currency(launch["value"]), _currency(final_size)
@@ -1119,8 +1205,19 @@ def _clause_start(text, pos):
     return max(_sentence_start(text, pos), text.rfind("; ", 0, pos) + 2)
 
 
-def _tranche_windows(prose):
+def _tranche_windows(prose, issue_year=None, own_series=frozenset()):
     """Group prose into one text window per Class label, in first-seen order.
+
+    A label whose every mention sits in a backward reference is another
+    deal's tranche: Akibare 2020-1 (single Class A) compares itself to "the
+    $100 million Class B tranche ... from Akibare Re Ltd. (Series 2018-1)" and
+    used to grow a phantom Class B row carrying the 2018 deal's EL and coupon.
+    A sentence that ALSO names one of this deal's own series is about both
+    ("Series 2018-1 Class A-1 and Series 2018-2 Class A-2 notes", the twin
+    Kilimanjaro issuances) and keeps its label. The series rule only, not the
+    year rule: sentence boundaries are unreliable on list-style pages
+    (Triangle 2021-3's "$21.854m Class B-1 notes, unrated." merged into a
+    clause citing 2015) and a year alone is too weak to delete a tranche.
 
     Windows start at the beginning of the *sentence* holding the label, not at
     the label itself: Artemis writes the size before the class name ("A $300
@@ -1144,6 +1241,8 @@ def _tranche_windows(prose):
     real = set()
     for label, ms in by_label.items():
         for m in ms:
+            if _cites_only_foreign_series(_sentence_at(prose, m.start()), own_series):
+                continue
             window = prose[max(0, m.start() - 60):m.end() + 60]
             before = prose[max(0, m.start() - 30):m.start()]
             after = prose[m.end():m.end() + 30]
@@ -1203,7 +1302,8 @@ def _tranche_context(record):
         "prose": record["_meta"]["full_details_text"] or "",
         "issue_year": int(m_iy.group(1)) if m_iy else None,
         "deal_size": record["size"]["value"],
-        "deal_total": _money_to_number(record["size"]["value"] or "") or None,
+        "deal_total": (None if "unit_missing" in record["size"]["flags"]
+                       else _money_to_number(record["size"]["value"] or "") or None),
         "deal_launch": next((h["value"] for h in hist
                              if h["state"] == "launch"), None),
         "own_series": (_series_tokens(record["deal_name"]["value"] or "")
@@ -1514,7 +1614,7 @@ def parse_tranches(record):
     if not ctx["prose"]:
         return []
 
-    windows = _tranche_windows(ctx["prose"])
+    windows = _tranche_windows(ctx["prose"], ctx["issue_year"], ctx["own_series"])
     unresolved = False
     if not windows:
         # No class labels. If the deal-level scalars saw multiple candidates
@@ -1674,6 +1774,8 @@ def check_tranche_sum(record, rows):
     deal_size = record["size"]["value"]
     if not deal_size or not rows:
         return None, "no deal size or no tranches"
+    if "unit_missing" in record["size"]["flags"]:
+        return None, "deal size has no unit"
     sizes = [r.get("tranche_size_final") for r in rows]
     if not all(sizes):
         return None, "incomplete tranche sizes"

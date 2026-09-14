@@ -29,15 +29,46 @@ import re
 
 # Cue -> kind, most specific first. The FIRST match wins, so ordering is the
 # classification policy and belongs in one visible place.
+# An optional third element BEFORE marks a cue that governs only the amount
+# AFTER it. "targets $175 million in coverage, attaching lower down at $650
+# million" (Torrey Pines 2025-1): the bridged attachment cue sits in the
+# $175m's after-window and must not claim it.
+BEFORE = "before_only"
 KIND_CUES = [
-    ("exhaustion", r"exhaust(?:ion|s)?\s*(?:point)?\s*(?:of|at)|up to an exhaustion"),
+    ("exhaustion", r"exhaust(?:ion|s|ing)?\s*(?:point)?\s*(?:of|at)|up to an exhaustion"),
     ("attachment", r"attach(?:ment|es|ing)?\s*(?:point)?\s*(?:of|at)"),
+    # "attach lower down at $1.795 billion" (Kilimanjaro III 2026-2): allow a
+    # few words between the verb and its preposition, before the amount only.
+    ("attachment", r"attach(?:ment|es|ing)?\s*(?:point)?(?:\s+\w+){1,3}\s*(?:of|at)\b", BEFORE),
     ("deductible", r"deductible"),
     ("retention", r"\bretention\b|\bfranchise\b"),
     ("term_loan", r"term loan"),
-    ("layer", r"\blayer\b"),
+    ("layer", r"\blayer\b|\breinsurance towers?\b"),
     ("payout", r"payout|paid out|principal reduction|loss(?:es)? of"),
-    ("trigger", r"trigger point|index value"),
+    ("trigger", r"trigger point|trigger value|trigger level|index value|"
+                r"index level|index trigger"),
+    # Amounts that are somebody else's capital, not this deal's size. Each
+    # cue is a real page: Finca 2025-1's "$10 billion" was the index
+    # THRESHOLD; Meadows 2025-1's "$8 billion" was the investor's AUM;
+    # FloodSmart 2020-1's "$1.1 billion" was FEMA's total cover AFTER the
+    # deal; Muteki's "US$ 1bn" was the programme's aggregate volume;
+    # Kilimanjaro III 2026-2's "$530 million" was a target ACROSS two series;
+    # Power Protective 2021-1's "$50 million" was its predecessor's size.
+    ("threshold", r"threshold"),
+    ("aum", r"assets under management|in assets|of assets|under management|\bAUM\b"),
+    # "across the two series" is deliberately NOT here: whether that is
+    # another deal's total depends on how many series THIS entry covers,
+    # which only the parser knows (CUMULATIVE_RE in parse_deal).
+    # "after this deal is issued" is sentence-level (CUMULATIVE_RE), not here.
+    # bare "alongside" hit "marketed to investors, alongside their preliminary
+    # ratings: $92.0 million Class M-1A" (Bellemeade 2020-2); bind it to "sit".
+    ("other_capital", r"\bsit(?:s|ting)? (?:\w+ )?alongside|traditional (?:sources of )?reinsurance|"
+                      r"reinsurance towers?|programme|aggregate volume|"
+                      r"future issuances"),
+    ("predecessor", r"(?:first|previous|prior|earlier|last|predecessor|original|"
+                    r"maturing|inaugural|debut)\s+(?:[\w'\u2019-]+\s+){0,3}"
+                    r"(?:cat bonds?|deals?|transactions?|issuances?|bonds?)\b"
+                    r"[^$\u20ac\u00a3]{0,30}\b(?:which|that|was|were)\b"),
     ("size", r"in size|size of|sized at|tranche of|of notes|of cat bond notes|"
              r"issuance of|of reinsurance|of protection|of capital|"
              r"secure|seeking|sought|targeted|priced at|settled at|finalis"),
@@ -60,6 +91,49 @@ CLASS_RE = re.compile(r"\bClass\s+([A-Z]{1,3}-\d+[A-Z]?|[A-Z]{1,3}\b|\d{1,2}\b)"
 
 WINDOW = 60          # chars either side searched for a governing cue
 
+# "The attachment point ... is at $800 million" (PoleStar 2024-3) and "the
+# layer of SafePoint's tower where this cat bond will feature is $200 million
+# in size" (Nature Coast 2024-1): the governing noun is the clause SUBJECT,
+# further back than any window, and the nearest cue after the amount ("in
+# size") says the opposite. When the amount is the predicate of a copula, the
+# earliest noun of the clause is what is being measured.
+SUBJECT_NOUNS = [
+    ("attachment", r"attachment point|attaches"),
+    ("exhaustion", r"exhaustion point"),
+    ("threshold", r"threshold"),
+    ("trigger", r"trigger (?:point|value|level)|index (?:value|level)"),
+    ("deductible", r"deductible"),
+    ("retention", r"\bretention\b|\bfranchise\b"),
+    # NOT bare "tower": Winston 2026-1's sponsor is Tower Hill Insurance.
+    ("layer", r"\blayers?\b|\b(?:reinsurance|insurance) towers?\b"),
+    ("size", r"\b(?:deal|transaction|issuance|offering|notes|cat bond|"
+             r"tranche|class|series|target|size|placement)\b"),
+]
+CLAUSE_CUT_RE = re.compile(r"[.;:,]\s|\b(?:and|but|while|whereas)\s")
+COPULA_TAIL_RE = re.compile(
+    r"\b(?:is|was|are|were|be|being|sits?|sat|stands?|stood|set|placed|"
+    r"comes? in|sitting)\b(?:\s+at)?(?:\s+(?:around|about|approximately|"
+    r"some|roughly|just|almost|nearly|only|now|currently))*\s*$", re.IGNORECASE)
+
+
+def _subject_kind(text, pos):
+    """Kind named by the subject of "<subject> is [at] $X", or None."""
+    span = text[max(0, pos - 160):pos]
+    cuts = list(CLAUSE_CUT_RE.finditer(span))
+    if cuts:
+        span = span[cuts[-1].end():]
+    if not COPULA_TAIL_RE.search(span):
+        return None
+    # "Class B layer" needs no special case: "class" is a size noun and
+    # precedes "layer", so the tranche wins. (A dedicated exemption was
+    # dead code and was mutation-tested out.)
+    best = None
+    for kind, pattern in SUBJECT_NOUNS:
+        for m in re.finditer(pattern, span, re.IGNORECASE):
+            if best is None or m.start() < best[0]:
+                best = (m.start(), kind)
+    return best[1] if best and best[1] != "size" else None
+
 
 def _numeric(num, mult):
     try:
@@ -75,14 +149,27 @@ def classify(text, pos, end):
     after = text[end:end + WINDOW]
     # A cue BEFORE the amount governs it more reliably than one after
     # ("attachment point of $9 billion" vs "$9 billion of losses").
+    # Order: cue before the amount; then the clause subject (see
+    # SUBJECT_NOUNS); then a cue after the amount. The subject sits between
+    # because "the layer ... is $200 million in size" has its true governor
+    # before the amount and a misleading cue after it.
     for hay, conf, dist in ((before, "high", lambda m: len(before) - m.end()),
+                            (None, "medium", None),
                             (after, "medium", lambda m: m.start())):
+        if hay is None:
+            subj = _subject_kind(text, pos)
+            if subj:
+                return subj, "subject", "medium"
+            continue
         # NEAREST cue wins, not the highest-priority one. Priority alone made
         # "offering $50m of notes ... the layer sits above" classify as a
         # layer, because `layer` outranks `size` in the list while sitting 20
         # characters further from the amount. Priority survives as a tiebreak.
         best = None
-        for rank, (kind, pattern) in enumerate(KIND_CUES):
+        for rank, entry in enumerate(KIND_CUES):
+            kind, pattern = entry[0], entry[1]
+            if len(entry) > 2 and entry[2] == BEFORE and hay is after:
+                continue
             for m in re.finditer(pattern, hay, re.IGNORECASE):
                 key = (dist(m), rank)
                 if best is None or key < best[0]:

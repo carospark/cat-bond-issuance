@@ -26,7 +26,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 from fetch import fetch, _cache_path                     # noqa: E402
-from parse_deal import _money_to_number                  # noqa: E402
+from parse_deal import _money_to_number, unit_missing    # noqa: E402
 
 DASH = ("https://www.artemis.bm/dashboard/"
         "catastrophe-bonds-ils-issued-and-outstanding-by-year/")
@@ -67,6 +67,8 @@ def usd_millions(size_text):
     if par:
         n = _money_to_number("$" + par.group(1) + (par.group(2) or ""))
         return (n / 1e6 if n else None), "usd_equiv"
+    if unit_missing(s):
+        return None, "unit_missing"         # "$473.18" (Radnor 2019-1)
     if s.startswith("$") or s.upper().startswith("US$"):
         n = _money_to_number(s)
         return (n / 1e6 if n else None), "usd"

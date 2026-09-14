@@ -1,6 +1,6 @@
 # Parser backlog — pick-up-when-bored list
 
-State when written: 1,311 deals parsed, 626 tests, 19% of deals carry a flag,
+State when written: 1,311 deals parsed, 967 tests, 19% of deals carry a flag,
 issuance validated to 0.6% against the publisher. Nothing here blocks analysis;
 every item is a *visible, flagged* gap, ordered roughly by value-per-hour.
 Method that has worked every time: read the page, verify the mechanism, fix the
@@ -87,19 +87,36 @@ captures, or coupon-including-collateral-yield phrasings. Start: list emitted
 spreads for 2019 and 2023 against their pages; compare an issuance-weighted
 mean; check mortgage-ILS SOFR-plus coupons.
 
-## 10. size_change series not analysis-grade (~1 evening, blocks a demand proxy)
+## 10. size_change series: level bias remains (~half evening)
 
-The offering-size-changes dashboard comparison FAILED: corr 0.10-0.22 against
-the publisher under three definitions (per-deal mean, incl-zero mean,
-dollar-weighted). Two causes to separate: their metric definition is unknown
-(90% quarters with our n=2 suggest theirs may include deals ours misses, or a
-different base), and our launch column is noisy - dollar-weighted quarters at
--43% / -57% mean launch values EXCEED finals at scale, consistent with the 75
-tranche_sum_launch violations. This is the day-one demand-proxy signal, so
-worth fixing: start from the biggest negative quarters (Q2 2025, Q4 2025,
-Q2 2021) and read those deals' launch values against their pages.
-`src/validate_dashboards.py` + `data/validation_dashboards/size_change.csv`
-reproduce the failure.
+**2026-09-14 round one done.** Correlation with the publisher's quarterly
+offering-size-change series went 0.22 -> 0.72 (`data/validation_dashboards/
+size_change.csv`). The launch column was the problem, not their definition:
+launch sizes were being read from amounts that were never sizes (an index
+threshold, an investor's AUM, a trigger value, an attachment point, a layer
+width, a programme ceiling) or never this deal's (a predecessor named as
+"(Series 2022-1)", a target "across the two series", cover held "after this
+deal"). Each is now a classified kind or a sentence veto with a golden pin;
+25 deals changed, all read against their pages.
+
+What remains is a **level** bias: our quarterly mean runs ~11pp above theirs.
+Selection is the likely cause - we emit a delta only when prose states a
+launch size, which skews to upsized, narrated deals - plus their metric may
+include zero-change deals. Start: compute our series including
+`no_size_change_detected` deals as 0 and see if the level closes; if it does,
+that is the definition and the remaining gap is recall on launch sizes
+(910/1,311 deals have one). Also still open from this round:
+
+- "Both Series target $500m ... each" (Galilei 2016-1/2017-1): a per-series
+  target stated with "each" is vetoed as cross-series. Handle "each".
+- Kilimanjaro III 2026-1/2026-2: Artemis states ONE target across two
+  entries. Launch is None with `launch_target_shared_across_series`; if the
+  analysis wants it, splitting is the analysis side's arithmetic.
+- Single-tranche deals whose only launch sentence is class-scoped ("$175m
+  Class A notes", Aozora 2016-1) have no deal launch by design. Could adopt
+  the tranche launch when the deal states exactly one tranche.
+- `could secure as much as $358.4 million` (Bellemeade 2022-2) is a ceiling,
+  not a launch, and slips the speculative veto (no "maximum").
 
 ## Standing rules (hard-won, do not relearn)
 

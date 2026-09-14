@@ -174,8 +174,12 @@ def main():
     ax[1, 1].set_xticks(list(x)[::4])
     ax[1, 1].set_xticklabels(c.q[::4], rotation=45, fontsize=7)
     v = c.dropna(subset=["ours_changed_mean"])
-    ax[1, 1].set_title("Offering size change by quarter — corr %.2f: NOT VALIDATED"
-                       % v.artemis_pct.corr(v.ours_changed_mean))
+    # No hard-coded verdict: the number IS the verdict. 0.10-0.22 before the
+    # 2026-09 launch-size fixes, 0.72 after; the level still runs high
+    # because we only emit a delta when prose states a launch size.
+    ax[1, 1].set_title("Offering size change by quarter — corr %.2f, mean diff %+.0fpp"
+                       % (v.artemis_pct.corr(v.ours_changed_mean),
+                          (v.ours_changed_mean - v.artemis_pct).mean()))
     ax[1, 1].legend(fontsize=8)
 
     plt.tight_layout()

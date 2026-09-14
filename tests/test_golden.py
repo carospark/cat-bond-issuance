@@ -21,7 +21,11 @@ from validate import validate  # noqa: E402
 from sibling_registry import SiblingRegistry  # noqa: E402
 from fetch import DEAL_DIRECTORY_URL as BASE  # noqa: E402
 from parse_deal import (_is_backward_reference, sentences,  # noqa: E402
-                        _pct_to_float)
+                        _pct_to_float, _series_tokens, CUMULATIVE_RE,
+                        _cites_only_foreign_series,
+                        SPECULATIVE_SIZE_RE, TRANCHE_OF_RE)
+from mentions import classify  # noqa: E402
+from net_supply import usd_millions  # noqa: E402
 from parse_deal import (parse_deal, parse_tranches, check_tranche_sum,  # noqa: E402
                         MONTHS, TIER1_KEYS, MONEY_RE, NEGATED_RESIZE_RE,
                         CANCELLED_RE, TIER2_PATTERNS, TRANCHE_SIZE_RES,
@@ -57,6 +61,30 @@ PAGES = [
     "queen-street-x-re-ltd",            # "not completed / withdrawn"
     "baltic-pcc-limited-series-2025-1", # GBP; "remains at ... in size"
     "lion-i-re-ltd",                    # "coupon of 2.25% to 2.5%" low end
+    # Size-change validation round (2026-09): launch sizes that were not
+    # sizes, or not this deal's. Each is a distinct mechanism; see the
+    # KIND_CUES / SUBJECT_NOUNS comments in mentions.py and CUMULATIVE_RE /
+    # SPECULATIVE_SIZE_RE / TRANCHE_OF_RE in parse_deal.py.
+    "finca-re-ltd-series-2025-1",       # "$10 billion" index threshold
+    "meadows-ltd-series-2025-1",        # "$8 billion" investor AUM
+    "everglades-re-ii-ltd-series-2020-1-2020-2",  # "$900m" traditional towers
+    "everglades-re-ii-ltd-series-2023-1-2023-2",  # one entry, two series: "across the two series" is OURS
+    "longpoint-re-ii-ltd",              # "$2.25b" index trigger value
+    "nature-coast-re-ltd-series-2024-1",  # "the layer ... is $200 million in size"
+    "polestar-re-ltd-series-2024-3",    # "the attachment point ... is at $800 million"; speculative max
+    "muteki-ltd",                       # programme aggregate volume
+    "floodsmart-re-ltd-series-2020-1",  # "$1.1 billion ... after this deal is issued"
+    "sanders-re-iii-ltd-series-2022-2", # "(Series 2022-1)" parenthetical is a NAME
+    "kilimanjaro-iii-re-ltd-series-2026-2",  # "$530m across the two series" -> no launch
+    "kilimanjaro-re-ltd-series-2014-1", # "$250m split evenly between the two tranches" IS a launch
+    "radnor-re-2019-1-ltd",             # Tier-1 "Size: $473.18", unit lost
+    "power-protective-re-ltd-series-2021-1",  # predecessor "which was $50m"; "maximum ... would be"
+    "herbie-re-ltd-series-2020-2",      # "tranche of Cklass B notes" (sic)
+    "blue-ridge-re-ltd-series-2025-1",  # "across the Series 2025-1 issuance" is its OWN series
+    "winston-re-ltd-series-2026-1",     # sponsor "Tower Hill" is not a tower
+    "isosceles-insurance-ltd-series-2023-a-c-g",  # letter series "2023-A, C, G"
+    "mystic-re-ii-ltd-series-2009-1",   # "$50 billion" industry trigger level
+    "akibare-re-pte-ltd-series-2020-1", # predecessor's "Class B" grew a phantom row
 ]
 
 # Verified by reading the source prose; see notes for provenance.
@@ -241,6 +269,8 @@ REJECT = {
     # Medical benefit ratios (~96-102%) are a different unit, never EL/AP.
     "vitality-re-v-ltd-series-2014-1": {"expected_loss": "99.55%",
                                         "attachment_probability": "96%"},
+    # Akibare 2018-1's EL, cited "for comparison" on the 2020-1 page.
+    "akibare-re-pte-ltd-series-2020-1": {"expected_loss": "0.99%"},
     # A cancelled deal must never report issued principal.
     "gateway-re-ltd-series-2024-3": {"size": "$100 million"},
     # "coupon of 2.25% to 2.5%" is a range; 2.25% must come from the settled
@@ -258,6 +288,55 @@ SIZE_CHANGE = {
     "merna-reinsurance-ltd": None,                   # "$9 million tranche C term loan"
     "citrus-re-ltd-series-2014-2": None,             # "$200m to $450m of its tower"
     "finca-re-ltd-series-2022-1": None,              # "$15 million ... deductible"
+    # 2026-09 size-change round. A None here means the page states no launch
+    # size for THIS deal; the value it used to report is in SIZE_LAUNCH_REJECT.
+    "finca-re-ltd-series-2025-1": None,
+    "meadows-ltd-series-2025-1": ("upsized", 8.0),         # $125m -> $135m
+    "polestar-re-ltd-series-2024-3": ("upsized", 180.0),   # $75m -> $210m
+    "floodsmart-re-ltd-series-2020-1": ("upsized", 33.3),  # $300m -> $400m
+    "sanders-re-iii-ltd-series-2022-2": ("upsized", 15.0), # $250m -> $287.5m
+    "everglades-re-ii-ltd-series-2023-1-2023-2": ("upsized", 275.0),
+    "blue-ridge-re-ltd-series-2025-1": ("upsized", 53.8),  # $325m -> $500m
+    "kilimanjaro-re-ltd-series-2014-1": ("upsized", 80.0), # $250m -> $450m
+    "isosceles-insurance-ltd-series-2023-a-c-g": None,     # $87.6m -> $87.6m
+    "radnor-re-2019-1-ltd": None,
+    "power-protective-re-ltd-series-2021-1": None,
+    "nature-coast-re-ltd-series-2024-1": None,
+    "longpoint-re-ii-ltd": None,
+    "muteki-ltd": None,
+    "everglades-re-ii-ltd-series-2020-1-2020-2": None,
+    "kilimanjaro-iii-re-ltd-series-2026-2": None,
+    "herbie-re-ltd-series-2020-2": None,
+    "mystic-re-ii-ltd-series-2009-1": None,
+}
+
+# Launch sizes that were reported and are NOT this deal's launch size. A
+# REJECT for the launch state specifically: the whole-history expectations
+# below pin the positive; this pins the mechanism each page exposed.
+SIZE_LAUNCH_REJECT = {
+    "finca-re-ltd-series-2025-1": "$10 billion",        # index threshold
+    "meadows-ltd-series-2025-1": "$8 billion",          # investor AUM
+    "everglades-re-ii-ltd-series-2020-1-2020-2": "$900 million",  # traditional towers
+    "longpoint-re-ii-ltd": "$2.25b",                    # index trigger value
+    "nature-coast-re-ltd-series-2024-1": "$200 million",  # the layer's width
+    "polestar-re-ltd-series-2024-3": "$800 million",    # attachment point
+    "muteki-ltd": "US$ 1bn",                            # programme volume
+    "floodsmart-re-ltd-series-2020-1": "$1.1 billion",  # cover after this deal
+    "sanders-re-iii-ltd-series-2022-2": "$550 million", # Series 2022-1's size
+    "kilimanjaro-iii-re-ltd-series-2026-2": "$530 million",  # across two series
+    "power-protective-re-ltd-series-2021-1": "$50 million",  # predecessor's size
+    "herbie-re-ltd-series-2020-2": "$125 million",      # Series 2020-1's size
+    "mystic-re-ii-ltd-series-2009-1": "$50 billion",    # industry trigger level
+}
+
+# Exact tranche row count. Akibare 2020-1 is "a single tranche of Series
+# 2020-1 Class A notes"; the Class B it mentions belongs to Series 2018-1.
+TRANCHE_COUNT = {"akibare-re-pte-ltd-series-2020-1": 1}
+
+# Flags that must be present: the "why" beside an honest None.
+FLAGS = {
+    "radnor-re-2019-1-ltd": {"size": "unit_missing"},
+    "kilimanjaro-iii-re-ltd-series-2026-2": {"size_history": "launch_target_shared_across_series"},
 }
 
 # Per-tranche values that are NOT deal facts. IBRD 111-112's deal-level
@@ -298,6 +377,33 @@ SIZE_HISTORY = {
                                 ("update_1", "EUR 80 million"),   # "expected to be between EUR 80m and EUR 100m"
                                 ("update_2", "EUR 100 million")],
     "operational-re-ltd": [("update_1", "CHF630m"), ("update_4", "$223m")],
+    # 2026-09 size-change round.
+    "finca-re-ltd-series-2025-1": [("update_1", "$125 million")],
+    "meadows-ltd-series-2025-1": [("launch", "$125 million"), ("update_1", "$135 million"),
+                                  ("update_2", "$135 million"), ("update_3", "$135 million")],
+    "everglades-re-ii-ltd-series-2020-1-2020-2": [],
+    "everglades-re-ii-ltd-series-2023-1-2023-2": [
+        ("launch", "$200 million"), ("update_1", "$600 million"),   # "across the two series" = this entry
+        ("update_2", "$775 million"), ("update_3", "$750 million")],
+    "longpoint-re-ii-ltd": [],
+    "nature-coast-re-ltd-series-2024-1": [("update_1", "$50 million")],
+    "polestar-re-ltd-series-2024-3": [("launch", "$75 million"), ("update_1", "$200 million"),
+                                      ("update_2", "$210 million")],
+    "muteki-ltd": [],
+    "floodsmart-re-ltd-series-2020-1": [("launch", "$300 million"), ("update_2", "$400 million")],
+    "sanders-re-iii-ltd-series-2022-2": [("launch", "$250 million"), ("update_1", "$275 million"),
+                                         ("update_2", "$287.5 million")],
+    "kilimanjaro-iii-re-ltd-series-2026-2": [],
+    "kilimanjaro-re-ltd-series-2014-1": [("launch", "$250m"), ("update_2", "$200m")],
+    "radnor-re-2019-1-ltd": [("launch", "$44 million"), ("update_1", "$473.2 million")],
+    "power-protective-re-ltd-series-2021-1": [("update_2", "$30 million")],
+    "herbie-re-ltd-series-2020-2": [("update_1", "$225 million"), ("update_2", "$275 million")],
+    "blue-ridge-re-ltd-series-2025-1": [("launch", "$325 million"), ("update_2", "$475 million"),
+                                        ("update_3", "$500 million")],
+    "winston-re-ltd-series-2026-1": [("launch", "$225 million"), ("update_1", "$375 million"),
+                                     ("update_2", "$375 million"), ("update_3", "$375 million")],
+    "isosceles-insurance-ltd-series-2023-a-c-g": [("launch", "$87.6 million")],
+    "mystic-re-ii-ltd-series-2009-1": [],
 }
 
 STOPWORDS = {"the", "this", "new", "a", "an", "its", "our"}
@@ -331,7 +437,39 @@ def unit_backward_reference():
         # parenthetical asides must not condemn the sentence
         ("Class 15 targeted $150 million (higher than the $50m in the 2025-1 bond)",
          2026, frozenset({"2026-1"}), False),
+        # ... but "(Series 2022-1)" after an issuer name is the NAME of another
+        # deal, not an aside (Sanders Re III 2022-2 adopted 2022-1's $550m).
+        ("the insurer secured $550 million from a Sanders Re III Ltd. (Series 2022-1) transaction.",
+         2022, frozenset({"2022-2"}), True),
+        ("a $250 million or greater Sanders Re III Ltd. (Series 2022-2) issuance now in the market.",
+         2022, frozenset({"2022-2"}), False),
+        # a letter-series entry citing one of its own series
+        ("$27.15955 million Series 2023-C notes due June 7, 2024.",
+         2023, frozenset({"2023-A", "2023-C", "2023-G"}), False),
     ]
+    # Tranche labels that live only in a sentence about ANOTHER series are
+    # that deal's tranches (Akibare 2020-1's "Class B ... (Series 2018-1)");
+    # a sentence naming both series is about both (twin Kilimanjaro).
+    for sentence, own, want in [
+        ("the $100 million Class B tranche of notes from Akibare Re Ltd. (Series 2018-1) catastrophe",
+         {"2020-1"}, True),
+        ("The Series 2018-1 Class A-1 and Series 2018-2 Class A-2 notes will target $50 million",
+         {"2018-1"}, False),
+        ("$21.854m Class B-1 notes, unrated.", {"2021-3"}, False),
+        ("The Class 13 tranche is similar to a Class 5 tranche from Residential Reinsurance 2012 Ltd. (Series 2012-1) cat bond.",
+         {"2014-1"}, True),
+    ]:
+        got = _cites_only_foreign_series(sentence, own)
+        check(got == want, f"UNIT foreign-series-only {sentence[:40]!r}", f"want={want} got={got}")
+    for text, want in [
+        ("Isosceles Insurance Ltd. (Series 2023-A, C, G)", {"2023-A", "2023-C", "2023-G"}),
+        ("isosceles-insurance-ltd-series-2023-a-c-g", {"2023-A", "2023-C", "2023-G"}),
+        ("everglades-re-ii-ltd-series-2020-1-2020-2", {"2020-1", "2020-2"}),
+        ("eclipse-re-ltd-series-2019-03a", {"2019-03A"}),
+        ("no series here, matures in 2027", set()),
+    ]:
+        got = _series_tokens(text)
+        check(got == want, f"UNIT series_tokens {text[:40]!r}", f"want={want} got={got}")
     for sentence, year, own, want in cases:
         got = _is_backward_reference(sentence, year, own)
         check(got == want, f"UNIT backref {sentence[:44]!r}", f"want={want} got={got}")
@@ -409,6 +547,92 @@ def unit_predicates():
         m = MONEY_RE.search(text)
         got = _governed_by_loss_level(text, m.start(), m.end())
         check(got == want, f"UNIT loss-level {text[:40]!r}", f"want={want} got={got}")
+    # Amount kinds added in the 2026-09 size-change round, one page each.
+    for text, amount, want in [
+        ("to be above a threshold of $10 billion to qualify during each annual risk period",
+         "$10 billion", "threshold"),
+        ("One William Street Capital Management has around US $8 billion in assets under management",
+         "US $8 billion", "aum"),
+        ("sit alongside traditional sources of reinsurance spanning some $900 million of its two reinsurance towers",
+         "$900 million", "other_capital"),
+        ("there will be an initial index trigger value of $2.25b.", "$2.25b", "trigger"),
+        ("a weighted insured industry loss trigger level of $50 billion, based on", "$50 billion", "trigger"),
+        ("through future issuances for an aggregate volume of up to US$ 1bn.", "US$ 1bn", "other_capital"),
+        # each other_capital cue alone, so a redundant neighbour cannot mask it
+        ("for an aggregate volume of up to US$ 1bn.", "US$ 1bn", "other_capital"),
+        ("Vita Capital III is a shelf-offering programme allowing Swiss Re to issue up to USD 2 billion of securities",
+         "USD 2 billion", "other_capital"),
+        ("with the $200 million or so likely to sit alongside its other cover", "$200 million", "other_capital"),
+        ("Zenkyoren can transfer more risk through future issuances of up to US$ 1bn from the vehicle",
+         "US$ 1bn", "other_capital"),
+        # subject rule: "Class B layer" is a tranche noun, so the next noun
+        # ("tranche") governs and the amount is a size
+        ("The Class B layer tranche sitting above the A notes to provide aggregate cover for the sponsor is $25 million in size",
+         "$25 million", "size"),
+        # subject rule needs a copula: without "is/was/sits", an early loss
+        # noun in the clause does not govern a later amount
+        ("Given the attachment point the sponsor selected the offering will seek $150 million of notes",
+         "$150 million", "size"),
+        # the bridged attachment cue governs only the amount AFTER it: here
+        # it sits in $175m's after-window and must not claim it
+        ("A Series 2025-1 Class B tranche targets $175 million in coverage for Palomar, attaching lower down at $650 million and exhausting coverage at",
+         "$175 million", "unknown"),
+        ("A Series 2025-1 Class B tranche targets $175 million in coverage for Palomar, attaching lower down at $650 million and exhausting coverage at",
+         "$650 million", "attachment"),
+        ("will attach their coverage at $3 billion of losses and exhausting at $3.75 billion, which gives them",
+         "$3.75 billion", "exhaustion"),
+        # "alongside" only when something SITS alongside; not "marketed
+        # to investors, alongside their preliminary ratings: $92.0 million"
+        ("being marketed to investors, alongside their preliminary ratings from DBRS Morningstar: $92.0 million Class M-1A at BBB",
+         "$92.0 million", "unknown"),
+        ("at least as big as the first LADWP cat bond, which was $50 million in size.",
+         "$50 million", "predecessor"),
+        # clause SUBJECT governs a copula predicate
+        ("So the layer of SafePoints reinsurance tower where this new Nature Coast Re 2024-1 cat bond will feature is $200 million in size, suggesting",
+         "$200 million", "layer"),
+        ("This time though, the attachment point for the PoleStar Re 2024-3 cyber cat bond notes is at $800 million, sitting atop",
+         "$800 million", "attachment"),
+        ("These notes will also provide per-occurrence protection, but attach lower down at $1.795 billion.",
+         "$1.795 billion", "attachment"),
+        # ... and must not fire on these
+        # unknown is admitted; the point is that "Tower" is not a tower
+        ("Tower Hill Insurance Exchange is now fixed on the $375 million target, while pricing",
+         "$375 million", "unknown"),
+        ("the deal is $150 million in size, with an attachment point of $2 billion", "$150 million", "size"),
+        ("comes out of the blocks at $300m in size, split into two tranches", "$300m", "size"),
+        ("with a target issuance size of $125 million or more.", "$125 million", "size"),
+    ]:
+        i = text.index(amount)
+        got = classify(text, i, i + len(amount))[0]
+        check(got == want, f"UNIT classify {text[:40]!r}", f"want={want} got={got}")
+    # Sentence-level vetoes on the deal-size loop.
+    for text, want in [
+        ("Across the two series offered, Everest is at first targeting at least $530 million of retrocession.", True),
+        ("FEMA will benefit from at least $1.1 billion of catastrophe bond backed flood reinsurance coverage after this deal is issued.", True),
+        ("Both Series target $500m of fully collateralised reinsurance protection each", True),
+        ("At launch the cat bond is being marketed as a $250m transaction split evenly between the two tranches of notes", False),
+        ("the initial target is for $325 million of protection across the Series 2025-1 issuance.", False),
+    ]:
+        got = bool(CUMULATIVE_RE.search(text))
+        check(got == want, f"UNIT cumulative {text[:40]!r}", f"want={want} got={got}")
+    for text, want in [
+        ("That suggests the maximum size of this cat bond would be $150 million, to cover the entire layer", True),
+        ("That could suggest a maximum size of $400 million were investor appetite to prove strong enough", True),
+        ("Florida Citizens has significantly increased its target size for these new catastrophe bonds, with as much as $600 million in reinsurance now sought", False),
+        ("The deal is targeting $300 million of flood reinsurance protection for FEMA", False),
+    ]:
+        got = bool(SPECULATIVE_SIZE_RE.search(text))
+        check(got == want, f"UNIT speculative {text[:40]!r}", f"want={want} got={got}")
+    for text, want in [
+        ("An also $75 million tranche of Cklass B notes have an initial expected loss of 3.61%", True),
+        ("Seaside Re will issue a $50 million tranche of notes to investors", False),
+    ]:
+        got = bool(TRANCHE_OF_RE.search(text))
+        check(got == want, f"UNIT tranche-of {text[:40]!r}", f"want={want} got={got}")
+    for text, want in [("$473.18", (None, "unit_missing")), ("$473.18m", (473.18, "usd")),
+                       ("$1.5 billion", (1500.0, "usd")), ("$298.89", (None, "unit_missing"))]:
+        got = usd_millions(text)
+        check(got == want, f"UNIT usd_millions {text!r}", f"want={want} got={got}")
     for text, want in [
         ("this issuance remains at UK \u00a3100 million in size, but the spread", True),
         ("did not change in size, so will secure the company $75 million", True),
@@ -654,6 +878,18 @@ def main():
         # Class D genuinely settled at $300m. Coincidence, not contamination.
         # The exact SIZE_HISTORY expectations above are the real guard.
 
+        if slug in TRANCHE_COUNT:
+            check(len(rws) == TRANCHE_COUNT[slug], f"EXPECT tranche count {slug}",
+                  f"want={TRANCHE_COUNT[slug]} got={len(rws)} {[r.get('tranche_id') for r in rws]}")
+        if slug in SIZE_LAUNCH_REJECT:
+            got = next((h["value"] for h in (rec["size_history"]["value"] or [])
+                        if h["state"] == "launch"), None)
+            check(got != SIZE_LAUNCH_REJECT[slug], f"REJECT launch {slug}",
+                  f"must not be {SIZE_LAUNCH_REJECT[slug]!r}, got {got!r}")
+        for key, flag in FLAGS.get(slug, {}).items():
+            check(flag in rec[key]["flags"], f"EXPECT flag {slug}:{key}",
+                  f"want {flag!r} in {rec[key]['flags']}")
+
         # GUARD: never emit a known-wrong value.
         for key, bad in REJECT.get(slug, {}).items():
             got = rec[key]["value"]
@@ -731,7 +967,7 @@ def main():
     # Pin the total. Guards are conditional on extracted data, so a regression
     # that empties a field silently removes its checks and the suite still
     # reports "all passed" on a smaller suite.
-    EXPECTED_CHECKS = 626
+    EXPECTED_CHECKS = 989
     if len(results) != EXPECTED_CHECKS:
         results.append((False, "GUARD check-count",
                         f"expected {EXPECTED_CHECKS} checks, ran {len(results)}"
