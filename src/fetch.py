@@ -11,7 +11,7 @@ import requests
 RAW_DIR = Path(__file__).resolve().parent.parent / "raw"
 
 USER_AGENT = (
-    "catbond-map/0.1 (research project on catastrophe bond fund flows; "
+    "cat-bond-issuance/0.1 (research project on catastrophe bond issuance data; "
     "contact caropark4@gmail.com)"
 )
 

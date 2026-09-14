@@ -1,4 +1,4 @@
-# cat_bond_fund_flow — project context
+# cat-bond-issuance — project context
 
 Analysis of capital flows into and out of catastrophe bond funds, built on the
 Artemis.bm catastrophe bond & ILS deal directory (1,311 deals, Dec 1996 – Aug 2026).

@@ -18,9 +18,9 @@ is validated, and everything still worth fixing, ordered by value per hour.
 2. **Backlog item 10**: size-change series correlation is 0.72 but the level
    runs ~11pp high. First step: include `no_size_change_detected` deals as 0
    and see if the level closes.
-3. **Rename the project.** The repo is `cat_bond_fund_flow` but the work is
-   data extraction, not fund flow. Rename folder, GitHub remote, README,
-   the analysis repo's companion link, and this doc once a name is chosen.
+3. ~~Rename the project~~ done 2026-09-14: `cat_bond_fund_flow` is now
+   `cat-bond-issuance` (folder, GitHub, README, pyproject, user agent,
+   analysis repo's companion link).
 
 Commits e0688a1 and 4df0cde are local and **not pushed**.
 
