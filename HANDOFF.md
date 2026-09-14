@@ -3,6 +3,27 @@
 Read `PARSER_BACKLOG.md` first. It is the current state: what is parsed, what
 is validated, and everything still worth fixing, ordered by value per hour.
 
+## NEXT — start here (set 2026-09-14)
+
+1. **Human-check five deals** against their Artemis pages, verifying the
+   launch-size reading from commit 4df0cde:
+   - PoleStar Re 2024-3: launch $75m (not the $800m attachment point, not the
+     "$400m maximum" speculation)
+   - Kilimanjaro III Re 2026-2: launch None, flagged
+     `launch_target_shared_across_series` ($530m is across two entries)
+   - Sanders Re III 2022-2: launch $250m (not Series 2022-1's $550m)
+   - Everglades Re II 2023-1/2023-2: one entry for two series, so "$600m
+     across the two series" is kept as this deal's update
+   - Meadows Ltd 2025-1: launch $125m (not the investor's $8bn AUM)
+2. **Backlog item 10**: size-change series correlation is 0.72 but the level
+   runs ~11pp high. First step: include `no_size_change_detected` deals as 0
+   and see if the level closes.
+3. **Rename the project.** The repo is `cat_bond_fund_flow` but the work is
+   data extraction, not fund flow. Rename folder, GitHub remote, README,
+   the analysis repo's companion link, and this doc once a name is chosen.
+
+Commits e0688a1 and 4df0cde are local and **not pushed**.
+
 ## State (2026-09-14)
 
 - Full crawl done: 1,311 deals parsed; `raw/` and `data/` are gitignored under
