@@ -72,11 +72,14 @@ TIER2_PATTERNS = {
         # loss, at 61.3%" / "Area B contributes 22.6%" are CONTRIBUTIONS to the
         # EL, not the EL. Any contribution wording between the cue and the
         # number disqualifies the capture.
-        (r"expected loss(?:(?!contribut)[^.%]){0,30}?(\d+(?:[.,]\d+)?\s*%)"
+        # "4% of expected losses, followed by energy at 5.2%" (Tradewynd
+        # 2013-1) is a list of peril shares; "followed by" ends the capture.
+        (r"expected loss(?:(?!contribut|followed by)[^.%]){0,30}?(\d+(?:[.,]\d+)?\s*%)"
          r"(?!\s*(?:of|for)\b)", "weak"),
     ],
     "attachment_probability": [
-        (r"attachment probability (?:for the notes )?(?:of|is|at|to be) "
+        # "probability of attachment of 21.38%" (Residential Re 2013-2, Class 1)
+        (r"(?:attachment probability|probability of attachment) (?:for the notes )?(?:of|is|at|to be) "
          r"(?:approximately |around |about |said to be )?(\d+(?:[.,]\d+)?\s*%)", "strong"),
         # Artemis sometimes writes "attachment point of 2.47%" for the
         # probability (Finca). A percentage is never a monetary point.
@@ -115,6 +118,11 @@ TIER2_PATTERNS = {
         (r"(?:initial )?risk (?:margin|interest spread) of (\d+(?:[.,]\d+)?\s*%)" + NOT_RANGE + r"", "strong"),
         (r"priced to pay (?:investors )?a spread of (\d+(?:[.,]\d+)?\s*%)" + NOT_RANGE + r"", "strong"),
         (r"coupon of (\d+(?:[.,]\d+)?\s*%)" + NOT_RANGE + r"", "strong"),
+        # Zero-coupon notes: "priced at 77.25%, so a coupon equivalent of
+        # 22.75%" (Residential Re 2019-2). The price is dropped by the
+        # spread-vs-price guard in _apply_patterns; this reads the equivalent.
+        (r"(?:coupon|spread) equivalent of (?:around |roughly |approximately )?"
+         r"(\d+(?:[.,]\d+)?\s*%)" + NOT_RANGE + r"", "strong"),
     ],
     "price_guidance": [
         (r"guidance[^.]{0,80}?(\d+(?:[.,]\d+)?\s*%\s*(?:to|and|[-–])\s*\d+(?:[.,]\d+)?\s*%)", "strong"),
@@ -175,6 +183,18 @@ CLASS_SCOPED_RE = re.compile(r"\bClass\s+[A-Z0-9]", re.IGNORECASE)
 # state their deal size that way, and a first draft of this rule threw away
 # 87 launch states.
 TRANCHE_OF_RE = re.compile(r"\btranche of (?:\w+ )?[A-Z](?:-\d+)? notes\b")
+# "There is a target of $125 million across the four year A-1 and five year
+# A-2 notes" (Kilimanjaro II 2025-1) and "The A-1 and A-2 tranches of notes
+# ... each targets $150 million" (Kilimanjaro III 2021-1): tranche labels
+# with no "Class" in front. Both became the deal launch and +300% / +120%
+# phantom upsizes. A letter-dash-digit token is a component label; series
+# identifiers (2025-1) never start with a letter, so they cannot match.
+LABELLED_NOTES_RE = re.compile(r"\b[A-Z]-\d[A-Z]?\b")
+# "This tranche is being marketed with a preliminary size of $50m"
+# (Residential Re 2013-2, one of three): a tranche pronoun scopes the amount.
+# NOT "the tranche": "The tranche of notes offered by Tradewynd Re has grown by
+# 25% to $125m" (Tradewynd 2013-1, single tranche) is the deal.
+TRANCHE_PRONOUN_RE = re.compile(r"^\W*(?:this|that|each) tranche\b", re.IGNORECASE)
 
 # Money governed by a loss-level noun is never a SIZE. Finca's "$15 million
 # event deductible" became the deal's launch size and a +400% phantom upsize.
@@ -255,10 +275,25 @@ def _governed_by_loss_level(text, start, end):
     if (LAYER_RE.search(text[end:end + 12])
             or LAYER_RE.search(text[max(0, start - 25):start])):
         return True
+    if re.match(r"\s*(?:of\s+)?(?:(?:industry|insured|market)\s+)?loss(?:es)?\b"
+                r"(?!\s+(?:protection|cover|reinsurance))", text[end:end + 24],
+                re.IGNORECASE):
+        # "the $100m industry loss" (Tar Heel 2013-1) is a trigger level;
+        # "cover U.S. Coastal up to $250 million of losses" (Eclipse Re
+        # 2018-01A) is the programme's limit.
+        return True
     kind, _cue, _conf = classify(text, start, end)
     return kind not in ("size", "unknown")
-AGGREGATE_RE = re.compile(r"\btotal|combined|aggregate|altogether|in all\b",
-                          re.IGNORECASE)
+# "Two Series 2020-1 tranches ... amounting to $200 million ... provide
+# per-occurrence ... while three Series 2020-2 tranches ... amounting to $140
+# million are targeting annual aggregate" (Caelus VI 2020): "aggregate" the
+# trigger structure rescued an enumeration as if it stated a total, and the
+# first component became the launch (+145% for a +44% deal). Only the
+# summing sense counts.
+AGGREGATE_RE = re.compile(
+    r"\btotal(?:s|l?ing)?\b|\bcombined\b|\bin aggregate\b|\baggregat(?:ing|ed)\b|"
+    r"\baggregate (?:size|amount|total|issuance|volume|limit|of|across)\b|"
+    r"\baltogether\b|\bin all\b", re.IGNORECASE)
 
 # Source placeholders. Artemis writes these where it has no data; they are
 # nulls wearing a value's clothes and previously sat in the table at HIGH
@@ -304,6 +339,44 @@ CCY = (r"(?<![A-Za-z])(?:C\$|NZ\$|A\$|US\$|HK\$|S\$|[$\u20ac\u00a3\u00a5]|"
        r"EUR|USD|GBP|CHF|JPY|AUD|CAD|NZD)")
 MONEY_RE = re.compile(CCY + r"\s?[\d,]+(?:\.\d+)?\s*(?:million|billion|bn|m\b|b\b)?", re.I)
 MULTIPLIER = {"m": 1e6, "million": 1e6, "bn": 1e9, "b": 1e9, "billion": 1e9}
+# "Two $50 million tranches of notes are being offered" (3264 Re 2024-1): a
+# count of equally sized components. The amount is one component's, and the
+# deal's $100m is arithmetic the page never did.
+COUNTED_TRANCHES_RE = re.compile(
+    r"\b(?:two|three|four|five|six|seven|eight|\d+)\s+" + CCY +
+    r"\s?[\d,.]+\s*(?:million|billion|bn|m|b)?\s+tranches\b", re.IGNORECASE)
+
+
+def _each_scoped(text, start, end):
+    """True if the amount at [start, end) is stated PER component.
+
+    "each tranche having a preliminary size of $50m" (Residential Re 2016-1,
+    three tranches, reported +400%), "two tranches of notes, each currently
+    sized at $200 million" (Acorn 2024-1, +125% for a +12.5% deal) and
+    "upsizing to $225 million each". Local on purpose: Kilimanjaro 2015-1's
+    genuine "$300m in size, split into two tranches of notes, each of which
+    are exposed" has its "each" a clause away, behind a comma.
+    """
+    before = text[max(0, start - 50):start]
+    after = text[end:end + 15]
+    # "each series now targeting $262.5 million" (Kilimanjaro 2018-1): a
+    # per-SERIES amount on a one-series entry is this deal's, not a part.
+    if re.search(r"\beach (?:of the (?:two|three|four) )?series\b[^,;.]*$", before, re.IGNORECASE):
+        return False
+    # After the amount only when adjacent: "totaling $53.3 million and with
+    # each tranche corresponding to a single segregated account" (Eclipse Re
+    # 2018-01A) is a total, and reading it as per-tranche produced +1010%.
+    return bool(re.search(r"\beach\b[^,;.]*$", before, re.IGNORECASE)
+                or re.match(r"\s*(?:million|billion|bn|m|b)?\s*(?:in size\s+)?each\b",
+                            after, re.IGNORECASE))
+
+
+# "This cat bond was initially marketed at €60m but closed at €75m" (Atlas
+# VI 2010-1): two amounts and no total, but the first is named as the launch.
+INITIAL_IDIOM_RE = re.compile(
+    r"\b(?:initially|originally) (?:marketed|sized|targeted|launched|offered|priced)"
+    r" (?:at|as|for|with)\s+(?:a\s+)?(?:size of\s+)?(" + CCY +
+    r"\s?[\d,]+(?:\.\d+)?\s*(?:million|billion|bn|m\b|b\b)?)", re.IGNORECASE)
 CCY_CODE = {"$": "USD", "US$": "USD", "USD": "USD", "\u20ac": "EUR", "EUR": "EUR",
             "\u00a3": "GBP", "GBP": "GBP", "\u00a5": "JPY", "JPY": "JPY",
             "CHF": "CHF", "C$": "CAD", "CAD": "CAD", "NZ$": "NZD", "NZD": "NZD",
@@ -491,6 +564,12 @@ def _sentence_spans(text):
             continue
         if SUFFIX_NONTERMINAL.search(head) and not nxt.isupper():
             continue  # "Ltd. (Series ..." / "Ltd. catastrophe ..." continues
+        if (SUFFIX_NONTERMINAL.search(head)
+                and re.match(r"(?:Series|Class)\b", text[m.end():m.end() + 6])):
+            # "$50m Atlas VI Capital Ltd. Series 2011-1 Class A notes": split
+            # here, the class label fell in the next sentence and $50m became
+            # the deal launch (+574%).
+            continue
         spans.append((start, m.start() + 1))
         start = m.end()
     if start < len(text):
@@ -539,6 +618,10 @@ def _cites_only_foreign_series(sentence, own_series):
     return bool(own and cited and (cited - own) and not (cited & own))
 
 
+PREDECESSOR_ANAPHORA_RE = re.compile(
+    r"^\W*That (?:deal|transaction|issuance|cat bond|bond|notes?)\b")
+
+
 def _is_backward_reference(sentence, issue_year, own_series=frozenset()):
     """True if the sentence cites a year earlier than this deal's issuance.
 
@@ -563,6 +646,11 @@ def _is_backward_reference(sentence, issue_year, own_series=frozenset()):
     # "(Series 2022-1)" after an issuer name is part of the NAME, not an
     # aside: stripping it let Sanders Re III 2022-2 adopt 2022-1's $550m.
     main_clause = re.sub(r"\((?!\s*Series\b)[^)]*\)", " ", sentence)
+    # "That deal afforded them $200m of cover" (Atlas VI 2011-1, about the
+    # 2010 bond it replaces): a sentence-initial "That <deal>" is anaphora to
+    # a deal just described, never this one. This deal is "this"/"the new".
+    if PREDECESSOR_ANAPHORA_RE.match(main_clause):
+        return True
     cited = _series_tokens(main_clause)
     if cited and own_series and (cited - set(own_series)):
         return True
@@ -586,10 +674,26 @@ BENEFIT_RATIO_RE = re.compile(r"benefit ratio", re.IGNORECASE)
 RATIO_GUARDED = {"expected_loss", "attachment_probability", "exhaustion_probability"}
 
 
+def _spread_is_price(value):
+    """A "spread" of 50% or more is a zero-coupon note's price of par.
+
+    "priced at 77.25%, so a coupon equivalent of 22.75%" (Residential Re
+    2019-2), "settled at 90.5% of par" (Matterhorn 2020-3), "fixed at 88.625%
+    of par" (Everglades 2023): eight such prices sat in the spread column at
+    77-94% and were the whole of the +2-4pp yearly bias against the
+    publisher's average (backlog 9). A phrase veto covers one wording; no cat
+    bond spread has ever been 50%, so the number itself is the test.
+    """
+    try:
+        return float(value.replace("%", "").replace(",", ".").strip()) >= 50
+    except ValueError:
+        return False
+
+
 def _apply_patterns(name, patterns, text, issue_year=None, own_series=frozenset()):
     """Run every pattern, collect distinct candidates, and grade the result."""
     hits, strength_used = [], None
-    dropped = []
+    dropped, par_prices = [], []
     for pattern, strength in patterns:
         for m in re.finditer(pattern, text, re.IGNORECASE):
             value = _clean(m.group(1))
@@ -608,6 +712,9 @@ def _apply_patterns(name, patterns, text, issue_year=None, own_series=frozenset(
             if _is_backward_reference(_sentence_at(text, m.start()), issue_year, own_series):
                 dropped.append(value)
                 continue
+            if name == "spread_risk_margin" and _spread_is_price(value):
+                par_prices.append(value)
+                continue
             if value not in [h[0] for h in hits]:
                 start, end = max(0, m.start() - 60), min(len(text), m.end() + 60)
                 hits.append((value, _clean(text[start:end]), strength))
@@ -619,6 +726,8 @@ def _apply_patterns(name, patterns, text, issue_year=None, own_series=frozenset(
         f = _field(flags=["not_found"])
         if dropped:
             f["flags"].append("foreign_deal_reference_excluded=%s" % dropped)
+        if par_prices:
+            f["flags"].append("discount_price_not_spread=%s" % par_prices)
         return f
 
     value, evidence, strength = hits[0]
@@ -632,6 +741,8 @@ def _apply_patterns(name, patterns, text, issue_year=None, own_series=frozenset(
         flags.append(f"candidates={[h[0] for h in hits]}")
     if dropped:
         flags.append("foreign_deal_reference_excluded=%s" % dropped)
+    if par_prices:
+        flags.append("discount_price_not_spread=%s" % par_prices)
     return _field(value, confidence, f"regex:{name}:{strength}", evidence, flags)
 
 
@@ -723,7 +834,10 @@ def parse_deal(html, deal_url=None):
                 continue  # figure belongs to a predecessor deal
             if not SIZING_CTX_RE.search(sentence):
                 continue  # money here is not a deal size
-            if CLASS_SCOPED_RE.search(sentence) or TRANCHE_OF_RE.search(sentence):
+            if (CLASS_SCOPED_RE.search(sentence) or TRANCHE_OF_RE.search(sentence)
+                    or LABELLED_NOTES_RE.search(sentence)
+                    or TRANCHE_PRONOUN_RE.search(sentence)
+                    or COUNTED_TRANCHES_RE.search(sentence)):
                 continue  # a tranche's size, not the deal's
             m_cum = CUMULATIVE_RE.search(sentence)
             if m_cum:
@@ -754,6 +868,9 @@ def parse_deal(html, deal_url=None):
                     and not _governed_by_loss_level(main, m_rng.start(g), m_rng.end(g))):
                 m, kind = m_rng, "range_low"      # low end is the launch figure
                 value = _clean(low)
+            elif len(amounts) > 1 and INITIAL_IDIOM_RE.search(main):
+                m = INITIAL_IDIOM_RE.search(main)
+                m, value = MONEY_RE.search(main, m.start(1)), _clean(m.group(1))
             else:
                 if len(amounts) > 1 and not AGGREGATE_RE.search(main):
                     continue  # components enumerated with no stated total
@@ -763,12 +880,25 @@ def parse_deal(html, deal_url=None):
                 value = _clean(m.group(0))
                 if re.search(r"up to\s*$", main[max(0, m.start() - 8):m.start()], re.I):
                     kind = "cap"
+            a_start, a_end = ((m.start(g), m.end(g)) if kind == "range_low"
+                              else (m.start(), m.end()))
+            if _each_scoped(main, a_start, a_end):
+                # "each tranche now targeting $200 million of coverage, for
+                # total reinsurance protection of $400 million" (Sakura
+                # 2021-1): the per-tranche figure is vetoed, the stated total
+                # after the aggregate cue is the deal's.
+                m_agg = AGGREGATE_RE.search(main, a_end)
+                m_tot = MONEY_RE.search(main, m_agg.end()) if m_agg else None
+                if not (m_tot and (_money_to_number(_clean(m_tot.group(0))) or 0) >= 1e6):
+                    continue  # one component's size, stated per tranche
+                m, kind, value = m_tot, "stated", _clean(m_tot.group(0))
             if conversions and headline_ccy and _currency(value) != headline_ccy:
                 alt = next((MONEY_RE.search(c).group(0) for c in conversions
                             if _currency(c) == headline_ccy), None)
                 if alt:
                     value, kind = _clean(alt), kind + ":converted"
-            size_history.append({"state": label, "value": value, "kind": kind})
+            size_history.append({"state": label, "value": value, "kind": kind,
+                                 "evidence": _clean(sentence)[:200]})
             break
     # Capital raised beside the notes. Merna's Tier-1 "$1.18bn" is $1,058.6m of
     # notes PLUS $122m of term loans; IBRD 111-112 sold $105m of swaps beside

@@ -85,6 +85,31 @@ PAGES = [
     "isosceles-insurance-ltd-series-2023-a-c-g",  # letter series "2023-A, C, G"
     "mystic-re-ii-ltd-series-2009-1",   # "$50 billion" industry trigger level
     "akibare-re-pte-ltd-series-2020-1", # predecessor's "Class B" grew a phantom row
+    # Size-change round two (2026-09-15): launch sizes that were ONE
+    # COMPONENT's, or a predecessor's. See LABELLED_NOTES_RE, _each_scoped,
+    # COUNTED_TRANCHES_RE, TRANCHE_PRONOUN_RE, AGGREGATE_RE and
+    # PREDECESSOR_ANAPHORA_RE in parse_deal.py.
+    "kilimanjaro-ii-re-ltd-series-2025-1",   # "$125 million across the ... A-1 and ... A-2 notes"
+    "kilimanjaro-iii-re-ltd-series-2021-1",  # "A-1 and A-2 tranches ... each targets $150 million"
+    "residential-reinsurance-2016-ltd-series-2016-1",  # "each tranche having a preliminary size of $50m"
+    "acorn-re-ltd-series-2024-1",            # "each currently sized at $200 million"; "$225 million each"
+    "3264-re-ltd-series-2024-1",             # "Two $50 million tranches of notes"
+    "residential-reinsurance-2013-ltd-series-2013-2",  # "This tranche is being marketed ... $50m"
+    "tar-heel-re-ltd-series-2013-1",         # "the $100m industry loss" is a trigger level
+    "atlas-vi-capital-ltd-series-2011-1",    # "Ltd. Series 2011-1 Class A" split; "That deal afforded them $200m"
+    "caelus-re-vi-ltd-series-2020-1-2020-2", # "annual aggregate" is a trigger, not a total
+    # ... and the genuine deal-level sentences those vetoes must let through.
+    "eclipse-re-ltd-series-2018-01a",        # "totaling $53.3 million and with each tranche"
+    "sakura-re-ltd-series-2021-1",           # "each tranche ... $200 million ... for total ... of $400 million"
+    "kilimanjaro-re-ltd-series-2018-1",      # "each series now targeting $262.5 million" is OURS
+    "atlas-vi-capital-ltd-series-2010-1",    # "initially marketed at €60m but closed at €75m"
+    "tradewynd-re-ltd-series-2013-1",        # "The tranche of notes ... grown by 25% to $125m", single tranche
+    "mayflower-re-ltd-series-2026-1",        # "remain $75 million in size each"
+    # Spread bias round (2026-09-15, backlog 9): zero-coupon prices of par
+    # in the spread column. See _spread_is_price in parse_deal.py.
+    "residential-reinsurance-2019-limited-series-2019-2",  # "priced at 77.25%, so a coupon equivalent of 22.75%"
+    "matterhorn-re-ltd-series-2020-3",       # "settled at 90.5% of par"
+    "gateway-re-ltd-series-2025-1",          # "zero-coupon pricing ... 93.75%"
 ]
 
 # Verified by reading the source prose; see notes for provenance.
@@ -308,6 +333,16 @@ SIZE_CHANGE = {
     "kilimanjaro-iii-re-ltd-series-2026-2": None,
     "herbie-re-ltd-series-2020-2": None,
     "mystic-re-ii-ltd-series-2009-1": None,
+    # 2026-09-15 round two. Tar Heel's page says "increased in size by 150%".
+    "tar-heel-re-ltd-series-2013-1": ("upsized", 150.0),   # $200m -> $500m, was +400% off "$100m industry loss"
+    "kilimanjaro-ii-re-ltd-series-2025-1": None,           # was +300% off one pair's $125m
+    "kilimanjaro-iii-re-ltd-series-2021-1": None,          # was +113% off "each targets $150 million"
+    "residential-reinsurance-2016-ltd-series-2016-1": None,  # was +400% off "each tranche ... $50m"
+    "acorn-re-ltd-series-2024-1": None,                    # was +125% for a +12.5% deal
+    "3264-re-ltd-series-2024-1": None,                     # was +180% for a +40% deal
+    "residential-reinsurance-2013-ltd-series-2013-2": None,  # was +200% off "This tranche ... $50m"
+    "atlas-vi-capital-ltd-series-2011-1": None,            # was +574% off Class A's $50m
+    "caelus-re-vi-ltd-series-2020-1-2020-2": None,         # was +145% for a +44% deal
 }
 
 # Launch sizes that were reported and are NOT this deal's launch size. A
@@ -327,6 +362,16 @@ SIZE_LAUNCH_REJECT = {
     "power-protective-re-ltd-series-2021-1": "$50 million",  # predecessor's size
     "herbie-re-ltd-series-2020-2": "$125 million",      # Series 2020-1's size
     "mystic-re-ii-ltd-series-2009-1": "$50 billion",    # industry trigger level
+    # 2026-09-15 round two: one component's size, or a predecessor's.
+    "kilimanjaro-ii-re-ltd-series-2025-1": "$125 million",   # the A-1/A-2 pair's target
+    "kilimanjaro-iii-re-ltd-series-2021-1": "$150 million",  # "each targets"
+    "residential-reinsurance-2016-ltd-series-2016-1": "$50m",  # "each tranche having"
+    "acorn-re-ltd-series-2024-1": "$200 million",       # "each currently sized at"
+    "3264-re-ltd-series-2024-1": "$50 million",         # "Two $50 million tranches"
+    "residential-reinsurance-2013-ltd-series-2013-2": "$50m",  # "This tranche"
+    "tar-heel-re-ltd-series-2013-1": "$100m",           # "the $100m industry loss"
+    "atlas-vi-capital-ltd-series-2011-1": "$50m",       # Class A's size, split off by "Ltd."
+    "caelus-re-vi-ltd-series-2020-1-2020-2": "$200 million",  # Series 2020-1's component
 }
 
 # Exact tranche row count. Akibare 2020-1 is "a single tranche of Series
@@ -346,6 +391,18 @@ TRANCHE_FIELDS = {
                          "Class B": {"price_guidance": "12.25% to 13%", "spread_risk_margin": "11.5%"}},
     "floodsmart-re-ltd-series-2024-1": {"Class A": {"attachment_point": "$9 billion"},
                                         "Class B": {"attachment_point": "$8 billion"}},
+    # "probability of attachment of 21.38%": the other word order.
+    "residential-reinsurance-2013-ltd-series-2013-2": {"Class 1": {"attachment_probability": "21.38%"}},
+    # Not the "5.2%" energy share from "4% of expected losses, followed by
+    # energy at 5.2%"; that capture put EL above AP.
+    "tradewynd-re-ltd-series-2013-1": {"Class 1": {"expected_loss": "1.43%"}},
+    # Zero-coupon notes: the price of par is not the spread. Residential Re
+    # states the equivalent; Matterhorn's "similar to a 9% to 9.75% coupon
+    # range" is a range, so honest None.
+    "residential-reinsurance-2019-limited-series-2019-2": {"Class 1": {"spread_risk_margin": "22.75%"},
+                                                           "Class 2": {"spread_risk_margin": "11.5%"}},
+    "matterhorn-re-ltd-series-2020-3": {"Class C": {"spread_risk_margin": None}},
+    "gateway-re-ltd-series-2025-1": {"Class A": {"spread_risk_margin": None}},
 }
 
 # Deal-level size history. A state here must be the DEAL's size, never a
@@ -377,6 +434,24 @@ SIZE_HISTORY = {
                                 ("update_1", "EUR 80 million"),   # "expected to be between EUR 80m and EUR 100m"
                                 ("update_2", "EUR 100 million")],
     "operational-re-ltd": [("update_1", "CHF630m"), ("update_4", "$223m")],
+    # 2026-09-15 round two. Empty lists are assertions: Kilimanjaro III 2021-1
+    # and Atlas VI 2011-1 state no deal-level size at all ("That deal afforded
+    # them $200m" is the 2010 bond's). Acorn's "$225 million each" is gone too.
+    "kilimanjaro-ii-re-ltd-series-2025-1": [("update_1", "$900 million"), ("update_2", "$900 million")],
+    "kilimanjaro-iii-re-ltd-series-2021-1": [],
+    "atlas-vi-capital-ltd-series-2011-1": [],
+    "tar-heel-re-ltd-series-2013-1": [("launch", "$200m"), ("update_1", "$500m")],
+    "acorn-re-ltd-series-2024-1": [("update_1", "$450 million"),
+                                   ("update_2", "$450 million")],  # the total, not "$225 million each"
+    "3264-re-ltd-series-2024-1": [("update_1", "$140 million")],
+    "residential-reinsurance-2016-ltd-series-2016-1": [("update_3", "$250m")],
+    "caelus-re-vi-ltd-series-2020-1-2020-2": [("update_2", "$490 million")],
+    "eclipse-re-ltd-series-2018-01a": [("launch", "$53.3 million")],  # not "up to $250 million of losses"
+    "sakura-re-ltd-series-2021-1": [("update_1", "$400 million")],    # the total, not the $200m per tranche
+    "kilimanjaro-re-ltd-series-2018-1": [("update_1", "$262.5 million")],
+    "atlas-vi-capital-ltd-series-2010-1": [("launch", "\u20ac60m")],
+    "tradewynd-re-ltd-series-2013-1": [("update_1", "$125m")],
+    "mayflower-re-ltd-series-2026-1": [("update_3", "$150 million")],  # not the $75m "in size each"
     # 2026-09 size-change round.
     "finca-re-ltd-series-2025-1": [("update_1", "$125 million")],
     "meadows-ltd-series-2025-1": [("launch", "$125 million"), ("update_1", "$135 million"),
@@ -689,6 +764,77 @@ def unit_predicates():
     check([l for l, _ in w] == ["Class A", "Class B"], "UNIT real classes kept", str(w))
 
 
+from parse_deal import (_each_scoped, LABELLED_NOTES_RE, COUNTED_TRANCHES_RE,  # noqa: E402
+                        TRANCHE_PRONOUN_RE, AGGREGATE_RE, PREDECESSOR_ANAPHORA_RE,
+                        sentences, _is_backward_reference, INITIAL_IDIOM_RE,
+                        _spread_is_price, TIER2_PATTERNS)
+
+
+def unit_component_scope():
+    """Pin the per-component vetoes of the 2026-09-15 size-change round.
+
+    Each predicate on the corpus sentence that motivated it AND on a genuine
+    deal-level sentence it must let through; the golden pages above only see
+    the end-to-end effect.
+    """
+    for text, want in [
+        ("with each tranche having a preliminary size of $50m.", True),
+        ("two tranches of notes, each currently sized at $200 million.", True),
+        ("both tranches of notes upsizing to $225 million each, for total", True),
+        ("The A-1 and A-2 tranches each targets $150 million, we understand.", True),
+        ("comes out of the blocks at $300m in size, split into two tranches of notes, each of which", False),
+        ("marketed as a $250m transaction split evenly between the two tranches", False),
+        ("notes issued, totaling $53.3 million and with each tranche corresponding to a single", False),
+        ("Both tranches of notes remain $75 million in size each at this time", True),
+        ("with each series now targeting $262.5 million of coverage across the two tranches", False),
+    ]:
+        m = MONEY_RE.search(text)
+        got = _each_scoped(text, m.start(), m.end())
+        check(got == want, f"UNIT each-scoped {text[:40]!r}", f"want={want} got={got}")
+    for rx, text, want in [
+        (LABELLED_NOTES_RE, "a target of $125 million across the four year A-1 and five year A-2 notes", True),
+        (LABELLED_NOTES_RE, "seeking $200 million of Series 2025-1 notes", False),
+        (LABELLED_NOTES_RE, "the IBRD CAR-120 notes for Peru", False),
+        (COUNTED_TRANCHES_RE, "Two $50 million tranches of notes are being offered", True),
+        (COUNTED_TRANCHES_RE, "will issue a $50 million tranche of notes", False),
+        (TRANCHE_PRONOUN_RE, "This tranche is being marketed with a preliminary size of $50m.", True),
+        (TRANCHE_PRONOUN_RE, "The single tranche of notes targets at least $75 million", False),
+        (AGGREGATE_RE, "are targeting annual aggregate indemnity reinsurance", False),
+        (AGGREGATE_RE, "for a total of $340 million across the five tranches", True),
+        (AGGREGATE_RE, "$500 million in aggregate", True),
+        (PREDECESSOR_ANAPHORA_RE, "That deal afforded them $200m of cover for those risks", True),
+        (PREDECESSOR_ANAPHORA_RE, "This deal will see Long Point Re III Ltd. issue a single tranche", False),
+    ]:
+        got = bool(rx.search(text))
+        check(got == want, f"UNIT {rx.pattern[:18]!r} on {text[:36]!r}", f"want={want} got={got}")
+    for text, want in [
+        ("must be large enough to create the $100m industry loss as well as cause", True),
+        ("designed to cover U.S. Coastal up to $250 million of losses and we understand", True),
+        ("seeking $200 million of loss protection from the capital markets", False),
+    ]:
+        m = MONEY_RE.search(text)
+        got = _governed_by_loss_level(text, m.start(), m.end())
+        check(got == want, f"UNIT loss-level suffix {text[:36]!r}", f"want={want} got={got}")
+    for v, want in [("77.25%", True), ("90.5%", True), ("22.75%", False), ("6,25%", False)]:
+        check(_spread_is_price(v) == want, f"UNIT spread-is-price {v}", f"want={want}")
+    f = _apply_patterns("spread_risk_margin", TIER2_PATTERNS["spread_risk_margin"],
+                        "The Class 1 layer of notes has now priced at 77.25%, so a coupon "
+                        "equivalent of 22.75% which is around the middle of guidance.")
+    check(f["value"] == "22.75%", "UNIT spread: price dropped, equivalent read", repr(f["value"]))
+    check(any(x.startswith("discount_price_not_spread") for x in f["flags"]),
+          "UNIT spread: dropped price is flagged", repr(f["flags"]))
+    m = INITIAL_IDIOM_RE.search("This cat bond was initially marketed at \u20ac60m but closed at \u20ac75m")
+    check(m is not None and m.group(1) == "\u20ac60m", "UNIT initial-idiom launch amount", repr(m and m.group(1)))
+    check(_is_backward_reference("That deal afforded them $200m of cover", 2011, frozenset({"2011-1"})),
+          "UNIT backward-reference 'That deal'")
+    check(not _is_backward_reference("This deal affords them $200m of cover", 2011, frozenset({"2011-1"})),
+          "UNIT backward-reference 'This deal' is ours")
+    got = sentences("The deal comprises $50m Atlas VI Capital Ltd. Series 2011-1 Class A notes. The cover will run.")
+    check(len(got) == 2 and "Class A" in got[0], "UNIT split keeps 'Ltd. Series' together", repr(got))
+    got = sentences("issued by Bermuda based SPV Tramline Re Ltd. The notes will be sold.")
+    check(len(got) == 2, "UNIT split still ends at 'Ltd. The'", repr(got))
+
+
 def unit_registry_rules():
     """The registry's own copies of the parser's rules, pinned.
 
@@ -735,6 +881,7 @@ def unit_percent_parsing():
 def main():
     unit_percent_parsing()
     unit_predicates()
+    unit_component_scope()
     unit_registry_rules()
     unit_sibling_registry()
     unit_sentences()
@@ -775,7 +922,12 @@ def main():
             v = rec[k]["value"]
             return _pct_to_float(v) if v else None
         el, ap = pct("expected_loss"), pct("attachment_probability")
-        if el and ap:
+        # Deal-level EL and AP are the FIRST capture of each, so on a
+        # multi-tranche page they can come from different tranches
+        # (Residential Re 2013-2: Class 1's EL=13.06 beside Class 4's
+        # AP=2.26). The ordering is only a fact within one tranche; the
+        # per-tranche guard below covers the rest.
+        if el and ap and len(parse_tranches(rec)) <= 1:
             check(el <= ap, f"GUARD EL<=AP {slug}", f"EL={el} AP={ap}")
 
         # GUARD: a size_change must be corroborated by explicit resize language.
@@ -967,7 +1119,7 @@ def main():
     # Pin the total. Guards are conditional on extracted data, so a regression
     # that empties a field silently removes its checks and the suite still
     # reports "all passed" on a smaller suite.
-    EXPECTED_CHECKS = 989
+    EXPECTED_CHECKS = 1263
     if len(results) != EXPECTED_CHECKS:
         results.append((False, "GUARD check-count",
                         f"expected {EXPECTED_CHECKS} checks, ran {len(results)}"
@@ -980,6 +1132,11 @@ def main():
             if el is not None:
                 check(el <= 100, f"GUARD pct-in-range {slug}:{r['tranche_id']}",
                       f"EL={el}")
+            # GUARD: a spread of 50%+ is a zero-coupon note's price of par.
+            sp = _pct_to_float(r.get("spread_risk_margin"))
+            if sp is not None:
+                check(sp < 50, f"GUARD spread-not-price {slug}:{r['tranche_id']}",
+                      f"spread={sp}")
             if el and ap:
                 check(el <= ap, f"GUARD EL<=AP {slug}:{r['tranche_id']}",
                       f"EL={el} AP={ap}")

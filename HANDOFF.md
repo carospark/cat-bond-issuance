@@ -3,10 +3,10 @@
 Read `PARSER_BACKLOG.md` first. It is the current state: what is parsed, what
 is validated, and everything still worth fixing, ordered by value per hour.
 
-## NEXT — start here (set 2026-09-14)
+## NEXT — start here (set 2026-09-15)
 
-1. **Human-check five deals** against their Artemis pages, verifying the
-   launch-size reading from commit 4df0cde:
+1. **Human-check** these against their Artemis pages. Round one (launch
+   sizes that were not sizes):
    - PoleStar Re 2024-3: launch $75m (not the $800m attachment point, not the
      "$400m maximum" speculation)
    - Kilimanjaro III Re 2026-2: launch None, flagged
@@ -15,23 +15,29 @@ is validated, and everything still worth fixing, ordered by value per hour.
    - Everglades Re II 2023-1/2023-2: one entry for two series, so "$600m
      across the two series" is kept as this deal's update
    - Meadows Ltd 2025-1: launch $125m (not the investor's $8bn AUM)
-2. **Backlog item 10**: size-change series correlation is 0.72 but the level
-   runs ~11pp high. First step: include `no_size_change_detected` deals as 0
-   and see if the level closes.
-3. ~~Rename the project~~ done 2026-09-14: `cat_bond_fund_flow` is now
-   `cat-bond-issuance` (folder, GitHub, README, pyproject, user agent,
-   analysis repo's companion link).
 
-Commits e0688a1 and 4df0cde are local and **not pushed**.
+   Round two (launch sizes that were one component's; spread = price of par):
+   - Kilimanjaro II Re 2025-1: launch None ("$125 million" is the A-1/A-2
+     pair's target); Tar Heel Re 2013-1: launch $200m, +150% (page says so)
+   - Acorn Re 2024-1: no launch, update $450m (not "$200 million each")
+   - Residential Re 2019-2 Class 1: spread 22.75% (not "priced at 77.25%")
+   - Merna Re II 2022-2: launch "$500 million" is WRONG (programme total);
+     known open, see backlog 10.
+2. **Backlog 10 opens**: the Merna sibling-sum rule is the one with a clear
+   mechanism. Backlog 9 (spread) is closed; backlog 1 has two fewer pages.
+3. ~~Rename the project~~ done 2026-09-14.
 
-## State (2026-09-14)
+The 2026-09-15 round-two commit is local and NOT pushed.
+
+## State (2026-09-15)
 
 - Full crawl done: 1,311 deals parsed; `raw/` and `data/` are gitignored under
   the Artemis licence rule (`DATA_POLICY.md`). Code is tracked, content is not.
-- `./.venv/bin/python tests/test_golden.py` — expect 626/626, offline.
+- `./.venv/bin/python tests/test_golden.py` — expect 1263/1263, offline.
 - `src/validate_dashboards.py` reproduces every publisher comparison. Issuance,
-  trigger mix and EL validate; spread carries a bias (backlog 9); the offering
-  size-change series does NOT validate (backlog 10).
+  trigger mix, EL and spread validate (spread: corr 0.90, -0.03pp after the
+  2026-09-15 price-of-par fix). The offering size-change series is bracketed
+  by two readings (backlog 10); the residual is the publisher's inclusion set.
 - The analysis layer lives in the sibling repo `cat-bond-flow-analysis`, which
   consumes `data/deals.csv` and `data/tranches.csv`. Non-USD conversion is
   decided there, not here.

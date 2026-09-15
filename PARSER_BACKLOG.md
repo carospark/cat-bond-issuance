@@ -1,6 +1,6 @@
 # Parser backlog — pick-up-when-bored list
 
-State when written: 1,311 deals parsed, 967 tests, 19% of deals carry a flag,
+State when written: 1,311 deals parsed, 1,263 golden checks, 19% of deals carry a flag,
 issuance validated to 0.6% against the publisher. Nothing here blocks analysis;
 every item is a *visible, flagged* gap, ordered roughly by value-per-hour.
 Method that has worked every time: read the page, verify the mechanism, fix the
@@ -13,6 +13,10 @@ class not the instance, pin it in `tests/test_golden.py`, mutation-test the pin.
 
 - `mythen-re-ltd-series-2012-2` — Class A EL=1.7 vs AP=0.36; one of the two is
   a mis-capture, read the page to see which.
+- Two of the same class fixed 2026-09-15 while pinning other pages: "probability
+  of attachment of 21.38%" (Residential Re 2013-2, word order) and "4% of
+  expected losses, followed by energy at 5.2%" (Tradewynd 2013-1, a peril
+  share). Read the remaining pages the same way.
 - `vitality-re-vii-ltd-series-2016-1` — EL=0.18 vs AP=0.03. Health deal;
   sibling of the fixed benefit-ratio class but a different sentence shape.
 - `queen-street-vi-re-ltd` — EL=2.71 vs AP=1.8, unlabelled tranche.
@@ -77,46 +81,64 @@ and the labeller writes the verbatim cell, not the extracted entity.
 ~12 deals stratified by decade ≈ 2 hours; `src/build_labelling_set.py` then
 `src/score_labels.py`.
 
-## 9. Spread series bias (~1 evening, found by dashboard validation)
+## 9. Spread series bias — CLOSED 2026-09-15
 
-Our yearly average spread runs +2-4pp above the publisher's in 2019-2020 and
-2023-2025 while matching in 2021/2026. EL matches at corr 0.93, so it is the
-spread column specifically. Candidates: selection (we only emit spread when
-prose states it, skewing to riskier narrated deals), residual price-vs-spread
-captures, or coupon-including-collateral-yield phrasings. Start: list emitted
-spreads for 2019 and 2023 against their pages; compare an issuance-weighted
-mean; check mortgage-ILS SOFR-plus coupons.
+Was +2-4pp against the publisher's yearly average in 2019-2020 and 2023-2025.
+One mechanism: **zero-coupon prices of par in the spread column** — "priced
+at 77.25%, so a coupon equivalent of 22.75%" (Residential Re 2019-2),
+"settled at 90.5% of par" (Matterhorn 2020-3), "fixed at 88.625% of par"
+(Everglades 2023). Eight values at 77-94% among ~380 spreads were the whole
+bias; the yearly medians had matched all along. Fix is numeric, not a phrase
+veto: `_spread_is_price` drops any spread candidate >= 50% (flag
+`discount_price_not_spread`), and a "coupon/spread equivalent of X%" pattern
+reads the stated equivalent. Result (`el_spread.csv`): corr 0.90, mean diff
+-0.03pp, every year 2012-2026 within 1.2pp. Still open, lower value:
 
-## 10. size_change series: level bias remains (~half evening)
+- Recall: spread is emitted for ~1/4 of tranches before 2025 (`n_spread`).
+- Guidance endpoints still leak as settled spreads ("guidance reduced to 16%
+  to 16.25%" -> 16%): NOT_RANGE only guards the anchors that carry it.
+- `price_guidance` still holds prices of par for zero-coupon notes.
 
-**2026-09-14 round one done.** Correlation with the publisher's quarterly
-offering-size-change series went 0.22 -> 0.72 (`data/validation_dashboards/
-size_change.csv`). The launch column was the problem, not their definition:
-launch sizes were being read from amounts that were never sizes (an index
-threshold, an investor's AUM, a trigger value, an attachment point, a layer
-width, a programme ceiling) or never this deal's (a predecessor named as
-"(Series 2022-1)", a target "across the two series", cover held "after this
-deal"). Each is now a classified kind or a sentence veto with a golden pin;
-25 deals changed, all read against their pages.
+## 10. size_change series — round two done 2026-09-15; level bracketed
 
-What remains is a **level** bias: our quarterly mean runs ~11pp above theirs.
-Selection is the likely cause - we emit a delta only when prose states a
-launch size, which skews to upsized, narrated deals - plus their metric may
-include zero-change deals. Start: compute our series including
-`no_size_change_detected` deals as 0 and see if the level closes; if it does,
-that is the definition and the remaining gap is recall on launch sizes
-(910/1,311 deals have one). Also still open from this round:
+**Round one (2026-09-14)**: corr 0.22 -> 0.72 by removing launch sizes that
+were never sizes or never this deal's (see the golden PAGES comments).
 
-- "Both Series target $500m ... each" (Galilei 2016-1/2017-1): a per-series
-  target stated with "each" is vetoed as cross-series. Handle "each".
-- Kilimanjaro III 2026-1/2026-2: Artemis states ONE target across two
-  entries. Launch is None with `launch_target_shared_across_series`; if the
-  analysis wants it, splitting is the analysis side's arithmetic.
-- Single-tranche deals whose only launch sentence is class-scoped ("$175m
-  Class A notes", Aozora 2016-1) have no deal launch by design. Could adopt
-  the tranche launch when the deal states exactly one tranche.
-- `could secure as much as $358.4 million` (Bellemeade 2022-2) is a ceiling,
-  not a launch, and slips the speculative veto (no "maximum").
+**Round two (2026-09-15)**: the remaining +11pp level was two things.
+(a) Launch sizes that were ONE COMPONENT's: tranche labels without "Class"
+("$125 million across the ... A-1 and ... A-2 notes", Kilimanjaro II 2025-1,
++300%), per-tranche "each" ("each tranche having a preliminary size of $50m",
+Residential Re 2016-1, +400%), counted tranches ("Two $50 million tranches",
+3264 Re 2024-1), "This tranche", "annual aggregate" rescuing an enumeration
+as a total (Caelus VI 2020), plus "$100m industry loss" as a size and a
+sentence split inside "Atlas VI Capital Ltd. Series 2011-1 Class A". 18
+launch values changed, all read against their pages; every veto is
+mutation-tested. (b) Definition: the dashboard text says the average is over
+"all cat bond issues ... where we have the information", so unchanged deals
+count as 0%. Counting EVERY deal with a launch state as 0 overshoots (-14pp,
+corr 0.33): a single post-pricing size is a final, not a tracked target, and
+private deals are most of them. `validate_dashboards.py` now emits both
+readings: `ours_changed_mean` (corr 0.75, +8.2pp) and `ours_tracked_mean`
+(launch stated AND a later update restated it, unchanged = 0: corr 0.69,
+-4.9pp, median -2.5pp). The publisher sits between them; Q2 2021 read deal
+by deal is all genuine upsizes, so the residual is their inclusion set, not
+our parse. Further work here is recall on launch sizes, not level.
+
+Still open from both rounds:
+
+- "Both Series target $500m ... each" (Galilei 2016-1/2017-1): the sentence
+  names both series, so the sibling rule excludes it before "each series"
+  (which is now accepted, Kilimanjaro 2018-1) can apply.
+- Merna Re II 2022-2 / 2022-3: "Enabling State Farm to source $500 million
+  ... with a full 144A cat bond" is the programme total ($300m + $200m) and
+  is now the launch of both (-60% / -40%). No phrase cue; the right rule is
+  a sibling-registry check "launch == sum of same-year sibling finals".
+- Vita Capital IV (programme-level page): "The Series II issuance in May
+  2010 saw $50m" is an earlier series of the same entry.
+- Kilimanjaro III 2026-1/2026-2: ONE target across two entries, launch None.
+- Single-tranche deals whose only launch sentence is class-scoped (Aozora
+  2016-1, Successor X "three series of $50m each") have no deal launch.
+- `could secure as much as $358.4 million` (Bellemeade 2022-2) is a ceiling.
 
 ## Standing rules (hard-won, do not relearn)
 

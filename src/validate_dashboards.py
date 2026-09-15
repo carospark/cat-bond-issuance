@@ -111,14 +111,35 @@ def cmp_el_spread(d):
 
 
 def cmp_size_change(d):
+    """Artemis: "we track the initial target size for each catastrophe bond
+    that comes to market and the final confirmed issuance size at settlement,
+    then work out the average percentage move ... across all cat bond issues
+    during the period", "where we have the information" (dashboard text).
+
+    Two readings, both emitted. `ours_changed_mean` averages only deals whose
+    prose states a launch size different from the final; it drops every deal
+    that settled at its target, so it runs high. `ours_tracked_mean` also
+    counts a deal as 0% when a launch size was stated AND at least one later
+    size update restated it -- the deals Artemis demonstrably tracked through
+    marketing. Counting EVERY deal with a launch state as 0% overshoots the
+    other way (2026-09-15: -14pp, corr 0.33): a single stated size on a page
+    written after pricing is the final, not a tracked target, and private
+    deals are the bulk of them.
+    """
     t = series("catastrophe-bond-offering-size-changes", year_categories=False)
     t = t.rename(columns={"cat": "q", "% Size change": "artemis_pct"})
     d = d.copy()
     d["delta"] = d.size_change.str.extract(r"'delta_pct':\s*(-?[\d.]+)")[0].astype(float)
+    states = d.size_history.map(lambda h: re.findall(r"'state':\s*'([^']+)'", h or ""))
+    d["tracked_zero"] = d.delta.isna() & states.map(
+        lambda L: "launch" in L and len(L) >= 2)
     sub = d[d.q.isin(set(t.q))]
     a = sub.dropna(subset=["delta"]).groupby("q").agg(
         ours_changed_mean=("delta", "mean"), n_changed=("delta", "size"))
-    c = t.set_index("q").join(a).reset_index()
+    tracked = sub[sub.delta.notna() | sub.tracked_zero]
+    b = tracked.assign(delta=tracked.delta.fillna(0.0)).groupby("q").agg(
+        ours_tracked_mean=("delta", "mean"), n_tracked=("delta", "size"))
+    c = t.set_index("q").join(a).join(b).reset_index()
     c["qsort"] = [int(q.split()[1]) * 4 + int(q[1]) for q in c.q]
     return c.sort_values("qsort").drop(columns="qsort")
 
@@ -170,16 +191,20 @@ def main():
     x = range(len(c))
     ax[1, 1].plot(x, c.artemis_pct, "k-", label="Artemis % size change")
     ax[1, 1].plot(x, c.ours_changed_mean, "--", color="#c0392b",
-                  label="our mean delta (changed deals)")
+                  label="our mean delta (changed deals only)")
+    ax[1, 1].plot(x, c.ours_tracked_mean, "--", color="#2b6cb0",
+                  label="our mean delta (tracked deals, unchanged = 0)")
     ax[1, 1].set_xticks(list(x)[::4])
     ax[1, 1].set_xticklabels(c.q[::4], rotation=45, fontsize=7)
-    v = c.dropna(subset=["ours_changed_mean"])
-    # No hard-coded verdict: the number IS the verdict. 0.10-0.22 before the
-    # 2026-09 launch-size fixes, 0.72 after; the level still runs high
-    # because we only emit a delta when prose states a launch size.
-    ax[1, 1].set_title("Offering size change by quarter — corr %.2f, mean diff %+.0fpp"
-                       % (v.artemis_pct.corr(v.ours_changed_mean),
-                          (v.ours_changed_mean - v.artemis_pct).mean()))
+    # No hard-coded verdict: the numbers ARE the verdict. Changed-only was
+    # corr 0.10-0.22 before the 2026-09-14 launch-size fixes and 0.72 after,
+    # running +11pp; the tracked-deals reading is what closes the level.
+    def fit(col):
+        v = c.dropna(subset=[col])
+        return v.artemis_pct.corr(v[col]), (v[col] - v.artemis_pct).mean()
+    ax[1, 1].set_title("Offering size change by quarter — changed-only corr %.2f (%+.0fpp), "
+                       "tracked corr %.2f (%+.0fpp)"
+                       % (fit("ours_changed_mean") + fit("ours_tracked_mean")), fontsize=9)
     ax[1, 1].legend(fontsize=8)
 
     plt.tight_layout()
