@@ -27,7 +27,7 @@ is validated, and everything still worth fixing, ordered by value per hour.
    mechanism. Backlog 9 (spread) is closed; backlog 1 has two fewer pages.
 3. ~~Rename the project~~ done 2026-09-14.
 
-The 2026-09-15 round-two commit is local and NOT pushed.
+Everything is pushed as of 2026-09-15.
 
 ## State (2026-09-15)
 
