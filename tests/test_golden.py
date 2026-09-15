@@ -120,6 +120,14 @@ PAGES = [
     "residential-reinsurance-2014-ltd-series-2014-1",  # "maturity extended again to December 6th 2018"
     "lakeside-re-ii-ltd",                    # "Lakeside Re I ... expires at the end of Dec 2009 so this deal seeks to replace it"
     "residential-reinsurance-2024-limited-series-2024-1",  # "Class 11 tranche ... to the end of May 2025, while the other two"
+    # Backlog 1 pages (2026-09-15): the attachment-probability object clause,
+    # and a differently numbered vehicle cited without a year.
+    "queen-street-vi-re-ltd",                # "attachment probability for the transaction is 3.87%"
+    "mythen-re-ltd-series-2012-2",           # "... for the Class A tranche of notes is 2.16%"
+    "vitality-re-vii-ltd-series-2016-1",     # "the Vitality Re II notes ... attachment probability of 0.03%"
+    # Backlog 4 (lifecycle): a single unlabelled tranche, settled total loss.
+    "artex-sac-limited-silver-crane-notes",  # "attached the notes and eroded their full principal"
+    "ibrd-car-111-112",                      # "would face a 100% loss of principal" is a forecast, not a loss
 ]
 
 # Verified by reading the source prose; see notes for provenance.
@@ -293,6 +301,10 @@ TRANCHE_SUM_OK = {"triangle-re-2019-1-ltd", "atlantic-western-re-ltd",
 # absence of a specific wrong answer is what makes these guards non-vacuous:
 # "field is None" would pass on total extraction failure, and did.
 REJECT = {
+    # Vitality Re II's attachment probability, cited on Vitality Re VII's page
+    "vitality-re-vii-ltd-series-2016-1": {"attachment_probability": "0.03%"},
+    # the U.S. hurricane peril's AP, not the transaction's 3.87%
+    "queen-street-vi-re-ltd": {"attachment_probability": "1.8%"},
     # Maturity round: an extension, a predecessor's expiry, one class's term.
     "residential-reinsurance-2014-ltd-series-2014-1": {"maturity_date": "December 2018"},
     "lakeside-re-ii-ltd": {"maturity_date": "Dec 2009"},
@@ -429,6 +441,14 @@ TRANCHE_FIELDS = {
                                                            "Class 2": {"spread_risk_margin": "11.5%"}},
     "matterhorn-re-ltd-series-2020-3": {"Class C": {"spread_risk_margin": None}},
     "gateway-re-ltd-series-2025-1": {"Class A": {"spread_risk_margin": None}},
+    # "attachment probability for the Class A tranche of notes is 2.16%", not
+    # the UK mortality peril's 0.36% (EL 1.7% sat above it).
+    "mythen-re-ltd-series-2012-2": {"Class A": {"attachment_probability": "2.16%"}},
+    "vitality-re-vii-ltd-series-2016-1": {"Class A": {"attachment_probability": None}},
+    # Lifecycle: settled total loss on a one-tranche page with no Class label;
+    # a hedged "would face a 100% loss" must stay None.
+    "artex-sac-limited-silver-crane-notes": {None: {"principal_loss_pct": 100.0}},
+    "ibrd-car-111-112": {"Class B": {"principal_loss_pct": None}},
 }
 
 # Deal-level size history. A state here must be the DEAL's size, never a
@@ -542,8 +562,9 @@ def unit_backward_reference():
         # deal, not an aside (Sanders Re III 2022-2 adopted 2022-1's $550m).
         ("the insurer secured $550 million from a Sanders Re III Ltd. (Series 2022-1) transaction.",
          2022, frozenset({"2022-2"}), True),
+        # own_series carries the vehicle token too (from the deal name / slug)
         ("a $250 million or greater Sanders Re III Ltd. (Series 2022-2) issuance now in the market.",
-         2022, frozenset({"2022-2"}), False),
+         2022, frozenset({"2022-2", "RE III"}), False),
         # a letter-series entry citing one of its own series
         ("$27.15955 million Series 2023-C notes due June 7, 2024.",
          2023, frozenset({"2023-A", "2023-C", "2023-G"}), False),
@@ -565,7 +586,7 @@ def unit_backward_reference():
     for text, want in [
         ("Isosceles Insurance Ltd. (Series 2023-A, C, G)", {"2023-A", "2023-C", "2023-G"}),
         ("isosceles-insurance-ltd-series-2023-a-c-g", {"2023-A", "2023-C", "2023-G"}),
-        ("everglades-re-ii-ltd-series-2020-1-2020-2", {"2020-1", "2020-2"}),
+        ("everglades-re-ii-ltd-series-2020-1-2020-2", {"2020-1", "2020-2", "RE II"}),
         ("eclipse-re-ltd-series-2019-03a", {"2019-03A"}),
         ("no series here, matures in 2027", set()),
     ]:
@@ -793,7 +814,8 @@ def unit_predicates():
 from parse_deal import (_each_scoped, LABELLED_NOTES_RE, COUNTED_TRANCHES_RE,  # noqa: E402
                         TRANCHE_PRONOUN_RE, AGGREGATE_RE, PREDECESSOR_ANAPHORA_RE,
                         sentences, _is_backward_reference, INITIAL_IDIOM_RE,
-                        _spread_is_price, TIER2_PATTERNS, MATURITY_EXCLUDE_RE, _strip_day)
+                        _spread_is_price, TIER2_PATTERNS, MATURITY_EXCLUDE_RE, _strip_day,
+                        _series_tokens, LC_ZERO_RE, LC_SPECULATIVE_RE)
 
 
 def unit_component_scope():
@@ -841,6 +863,29 @@ def unit_component_scope():
         m = MONEY_RE.search(text)
         got = _governed_by_loss_level(text, m.start(), m.end())
         check(got == want, f"UNIT loss-level suffix {text[:36]!r}", f"want={want} got={got}")
+    for text, want in [
+        ("Vitality Re VII Ltd. (Series 2016-1)", {"2016-1", "RE VII"}),
+        ("As ever the Vitality Re II notes are very remote risk", {"RE II"}),
+        ("the Class II notes and the Series 2012-2 issuance", {"2012-2"}),
+        ("sanders-re-iii-ltd-series-2022-2", {"2022-2", "RE III"}),   # the URL slug
+    ]:
+        check(_series_tokens(text) == want, f"UNIT series-tokens {text[:30]!r}", repr(_series_tokens(text)))
+    f = _apply_patterns("attachment_probability", TIER2_PATTERNS["attachment_probability"],
+                        "The overall initial attachment probability for the transaction is 3.87%, "
+                        "the expected loss is 2.71%. For U.S. hurricane the attachment probability is 1.8%.")
+    check(f["value"] == "3.87%", "UNIT AP object clause 'for the transaction is'", repr(f["value"]))
+    for text, want in [
+        ("it attached the notes and eroded their full principal, providing", True),
+        ("Jamaica would benefit from a payout of the full $150 million", True),
+        ("suggesting a total loss of the $150m of principal is anticipated", True),
+    ]:
+        check(bool(LC_ZERO_RE.search(text)) == want, f"UNIT lc-zero {text[:30]!r}")
+    for text, want in [
+        ("The Class B tranche would face a 100% loss of principal, so $95m.", True),
+        ("suggesting a total loss of the $150m of principal is anticipated", True),
+        ("it attached the notes and eroded their full principal, providing Toa Re", False),
+    ]:
+        check(bool(LC_SPECULATIVE_RE.search(text)) == want, f"UNIT lc-speculative {text[:30]!r}")
     for v, want in [("77.25%", True), ("90.5%", True), ("22.75%", False), ("6,25%", False)]:
         check(_spread_is_price(v) == want, f"UNIT spread-is-price {v}", f"want={want}")
     f = _apply_patterns("spread_risk_margin", TIER2_PATTERNS["spread_risk_margin"],
@@ -1160,7 +1205,7 @@ def main():
     # Pin the total. Guards are conditional on extracted data, so a regression
     # that empties a field silently removes its checks and the suite still
     # reports "all passed" on a smaller suite.
-    EXPECTED_CHECKS = 1400
+    EXPECTED_CHECKS = 1478
     if len(results) != EXPECTED_CHECKS:
         results.append((False, "GUARD check-count",
                         f"expected {EXPECTED_CHECKS} checks, ran {len(results)}"

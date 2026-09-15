@@ -6,21 +6,27 @@ every item is a *visible, flagged* gap, ordered roughly by value-per-hour.
 Method that has worked every time: read the page, verify the mechanism, fix the
 class not the instance, pin it in `tests/test_golden.py`, mutation-test the pin.
 
-## 1. The 7 remaining arithmetic impossibilities (~1 evening)
+## 1. Arithmetic impossibilities — three of four read 2026-09-15
 
 `data/validation.csv`, checks `EL<=attachment_probability` / `severity<=1` /
-`exhaustion<=EL`. Three distinct one-off capture errors, no shared mechanism:
+`exhaustion<=EL`. Read against their pages:
 
-- `mythen-re-ltd-series-2012-2` — Class A EL=1.7 vs AP=0.36; one of the two is
-  a mis-capture, read the page to see which.
-- Two of the same class fixed 2026-09-15 while pinning other pages: "probability
-  of attachment of 21.38%" (Residential Re 2013-2, word order) and "4% of
-  expected losses, followed by energy at 5.2%" (Tradewynd 2013-1, a peril
-  share). Read the remaining pages the same way.
-- `vitality-re-vii-ltd-series-2016-1` — EL=0.18 vs AP=0.03. Health deal;
-  sibling of the fixed benefit-ratio class but a different sentence shape.
-- `queen-street-vi-re-ltd` — EL=2.71 vs AP=1.8, unlabelled tranche.
-- `vita-capital-vi-limited-series-2021-1` — EP=1.16 > EL=0.75.
+- `queen-street-vi-re-ltd` (EL 2.71 vs AP 1.8) and `mythen-re-ltd-series-2012-2`
+  (Class A EL 1.7 vs AP 0.36): ONE pattern gap. "attachment probability for
+  the transaction is 3.87%" / "for the Class A tranche of notes is 2.16%"
+  were not accepted (only "for the notes"), so the next per-peril figure was
+  captured. Fixed; both now order correctly.
+- `vitality-re-vii-ltd-series-2016-1` (EL 0.18 vs AP 0.03): the 0.03% is
+  Vitality Re II's, cited without a year or series. Numbered vehicles are
+  now series tokens ("RE II" vs own "RE VII", from deal name and slug), so
+  the sentence is a foreign reference. AP is None; the 0.18% EL is still
+  Class B's read into Class A's window (tranche-window bleed, unfixed).
+- `vita-capital-vi-limited-series-2021-1` (Class B EP 1.16 > EL 0.75): the
+  PAGE says AP 1.06%, EP 1.16%, EL 0.75%. EP above AP is impossible; this is
+  a source typo, and the check is doing its job. Leave flagged.
+- Earlier the same day: "probability of attachment of 21.38%" (Residential
+  Re 2013-2) and "4% of expected losses, followed by energy at 5.2%"
+  (Tradewynd 2013-1). Read the rest of the list the same way.
 
 ## 2. The 49 sum-final mismatches (~2 evenings, or accept)
 
@@ -58,12 +64,30 @@ CLASS's term on a multi-class page. Result: 354 stated maturities,
 - Remaining ~700 deals with neither: mostly page-silent (sampled 5/6 before
   this round). Private deals are 332 of them.
 
-## 4. Lifecycle extractor breadth (~1 evening)
+## 4. Lifecycle extractor breadth — measured 2026-09-15, still thin
 
-`apply_tranche_lifecycle` was built from ONE deal (Citrus 2015-1) plus the
-losses table. `losses.csv` has 60 joinable rows; run the cross-check (deal-page
-lifecycle vs losses row) over all of them and extend the clause patterns for
-whatever phrasings miss. The cross-source disagreements ARE the worklist.
+`src/crosscheck_losses.py` now runs the cross-check the note below asked for
+and writes `data/validation_dashboards/losses_crosscheck.csv`: the losses
+table's 40 settled rows against the page-side `principal_loss_pct`. Result:
+1 agree, 0 disagree, 39 page-silent. Before this round it read 4 agreeing,
+but every one came from a HEDGED sentence ("The Class B tranche would face a
+100% loss of principal", IBRD 111-112) that happened to come true; a
+speculation guard (`LC_SPECULATIVE_RE`) now drops those, a single unlabelled
+tranche takes clauses with no Class (Silver Crane: "attached the notes and
+eroded their full principal"), and the total-loss vocabulary is wider. The
+extractor is honest but covers 1 in 40. What the silent pages say, in order
+of count, is the worklist:
+
+- Partial, stated as a remainder: "a payout of the remaining $48 million of
+  principal" (Claveau 2021-1), "principal ... reduced to $25.45 million"
+  (Randolph Re 2024-1), "$10 million still outstanding" (FloodSmart 2020-1).
+  Derive pct from tranche size; `loss_basis = "derived:remaining"`.
+- "X% loss of principal" appears on 14 pages but 24 carry mark-to-market
+  hedges ("bids of 5 cents", "suggesting", "implying"); only an unhedged
+  clause is a settlement.
+- Recoveries: "made an additional $2.2 million recovery" (Matterhorn
+  2020-2). Sponsor-side amounts; the investor loss is size minus returned.
+- IBRD Jamaica 2024 never states the settlement plainly; the table does.
 
 ## 5. Derived entity columns beyond agents (~half evening)
 

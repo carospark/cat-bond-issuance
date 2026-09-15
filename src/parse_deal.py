@@ -89,8 +89,14 @@ TIER2_PATTERNS = {
          r"(?!\s*(?:of|for)\b)", "weak"),
     ],
     "attachment_probability": [
-        # "probability of attachment of 21.38%" (Residential Re 2013-2, Class 1)
-        (r"(?:attachment probability|probability of attachment) (?:for the notes )?(?:of|is|at|to be) "
+        # "probability of attachment of 21.38%" (Residential Re 2013-2, Class 1);
+        # "attachment probability for the transaction is 3.87%" (Queen Street
+        # VI), "... for the Class A tranche of notes is 2.16%" (Mythen 2012-2):
+        # without the object clause, the next per-peril figure was captured
+        # and sat below the expected loss.
+        (r"(?:attachment probability|probability of attachment) "
+         r"(?:for (?:the |this )?(?:\w+\s+){0,4}?(?:notes|tranche|transaction|deal|bond|layer) )?"
+         r"(?:of|is|at|to be) "
          r"(?:approximately |around |about |said to be )?(\d+(?:[.,]\d+)?\s*%)", "strong"),
         # Artemis sometimes writes "attachment point of 2.47%" for the
         # probability (Finca). A percentage is never a monetary point.
@@ -632,6 +638,20 @@ def _series_tokens(text):
     """
     out = {t.upper() for t in
            re.findall(r"\b((?:19|20)\d\d-\d+[A-Za-z]?)\b", text or "")}
+    # A numbered vehicle is a series identifier too: Vitality Re VII's page
+    # says "the Vitality Re II notes are very remote risk, with an attachment
+    # probability of 0.03%" -- another deal, no year, no series. Keyed on the
+    # word before the numeral ("RE II", "CAPITAL IV", "ATLAS IX") so "The
+    # Vitality Re VII notes" and "Vitality Re VII Ltd." agree.
+    for word, numeral in re.findall(
+            r"\b([A-Z][A-Za-z]+)\s+(I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII|XIII|XIV|XV)\b(?![-\u2013]\d)",
+            text or ""):
+        if word.lower() not in ("class", "tranche", "phase", "tier", "stage", "part", "type"):
+            out.add(f"{word.upper()} {numeral}")
+    # The same from a URL slug: "sanders-re-iii-ltd-series-2022-2" -> "RE III".
+    for word, numeral in re.findall(
+            r"(?:^|-)([a-z]+)-(i|ii|iii|iv|v|vi|vii|viii|ix|x|xi|xii|xiii|xiv|xv)(?=-|$)", text or ""):
+        out.add(f"{word.upper()} {numeral.upper()}")
     # Letter series enumerate: "(Series 2023-A, C, G)" / slug "2023-a-c-g".
     for year, first, rest in re.findall(
             r"\b((?:19|20)\d\d)-([A-Za-z])((?:(?:,\s*|-)[A-Za-z]\b)*)", text or ""):
@@ -884,7 +904,10 @@ def parse_deal(html, deal_url=None):
             m_cum = CUMULATIVE_RE.search(sentence)
             if m_cum:
                 across_series = bool(re.search(r"series|directory", m_cum.group(0), re.I))
-                if across_series and len(own_series) >= 2:
+                # Count YEAR-series tokens only: vehicle tokens ("RE III") sit in
+                # own_series too, and counted them Kilimanjaro III 2026-2 read as
+                # a two-series entry and took "$530 million across the two series".
+                if across_series and sum(1 for t in own_series if re.match(r"(?:19|20)\d\d-", t)) >= 2:
                     pass  # Everglades 2023-1/2023-2 is ONE entry for both series
                 else:
                     shared_across_series |= across_series
@@ -1862,7 +1885,7 @@ def parse_tranches(record):
         row["tranche_flags"] = ";".join(flags)
         rows.append(row)
     _reconcile_tranche_sizes(rows, ctx)
-    apply_tranche_lifecycle(rows, ctx["prose"])
+    apply_tranche_lifecycle(rows, ctx["prose"], ctx.get("issue_year"), ctx.get("own_series") or frozenset())
     return rows
 
 
@@ -1882,23 +1905,44 @@ _LC_DATE = (r"((?:" + MONTHS + r")\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}"
             r"|(?:" + MONTHS + r")\s+\d{4})")
 LC_EXTENDED_RE = re.compile(r"(?:maturit\w+|notes?)?\s*(?:been\s+)?extended"
                             r"(?:\s+\w+){0,3}?\s+to\s+" + _LC_DATE, re.IGNORECASE)
-LC_ZERO_RE = re.compile(r"balance of zero|total loss of principal|100%\s*loss",
-                        re.IGNORECASE)
+LC_ZERO_RE = re.compile(
+    r"balance of zero|(?:total|full) loss of (?:their |its |the )?(?:\$[\d.,]+\s*(?:million|billion|bn|m\b|b\b)?\s+of\s+)?principal|100%\s*loss|"
+    # "eroded their full principal" (Silver Crane), "payout of the full $150
+    # million" (IBRD Jamaica 2024), "loss of all of the principal"
+    r"erod\w+ (?:their |its |the )?(?:full|entire|whole) principal|"
+    r"payout of (?:the )?full \$|loss of (?:all|the entirety) of (?:the |its |their )?principal",
+    re.IGNORECASE)
+# A total loss that is forecast, not settled: "suggesting a total loss of
+# the $150m of principal is anticipated" (Integrity Re II 2020-1, marked down
+# months before the notes were actually eroded). Settled prose has no hedge.
+LC_SPECULATIVE_RE = re.compile(
+    r"\b(?:could|would|may|might|suggest\w*|anticipat\w*|expect\w*|impl(?:y|ies|ied|ying)|"
+    r"possib\w*|likely|potential\w*|marked|bids?|cents on the dollar|if\b)",
+    re.IGNORECASE)
 LC_MATURE_RE = re.compile(r"\b(?:let|allowed)\b[^.]{0,60}?\bmature\b|"
                           r"\bmatured?\b", re.IGNORECASE)
-def apply_tranche_lifecycle(rows, prose):
+def apply_tranche_lifecycle(rows, prose, issue_year=None, own_series=frozenset()):
     """Fill maturity_extended / maturity_actual / principal_loss_pct in place.
 
     Clause-scoped: "Heritage has let the ... Class A ... mature, but both the
     Class B and Class C have had their maturities extended" assigns opposite
     outcomes within one sentence, so clauses split on but/while/; first.
+
+    A single-tranche deal's prose never says "Class": "eroded their full
+    principal" (Silver Crane), "a payout of the full $150 million" (IBRD
+    Jamaica 2024). With one tranche, a clause naming no class is about it --
+    unless the sentence cites a predecessor. Built from ONE deal (Citrus
+    2015-1) and measured 2026-09-15 against the losses table: 4 of 40 settled
+    losses had a page-side loss before this, see backlog 4.
     """
     known = {str(r.get("tranche_id")).upper(): r for r in rows if r.get("tranche_id")}
+    # One row, labelled or not: Silver Crane's only tranche has no Class.
+    single = list(rows) if len(rows) == 1 else []
     for r in rows:
         for k in ("maturity_extended", "maturity_actual", "principal_loss_pct",
                   "loss_basis", "lifecycle_evidence"):
             r.setdefault(k, None)
-    if not known or not prose:
+    if not (known or single) or not prose:
         return
     # _segment_prose_dated already parses each update heading's date; using it
     # instead of re-deriving here -- a first draft of this function wrote its
@@ -1908,10 +1952,14 @@ def apply_tranche_lifecycle(rows, prose):
     for label, text in segments:
         seg_date = seg_dates.get(label)
         for sent in sentences(text):
+            if single and _is_backward_reference(sent, issue_year, own_series):
+                continue  # a predecessor's fate, not this tranche's
             for clause in re.split(r"\bbut\b|\bwhile\b|;", sent):
                 targets = [known[("Class " + g).upper()]
                            for g in CLASS_RE.findall(clause)
                            if ("Class " + g).upper() in known]
+                if not targets and single and not CLASS_RE.search(clause):
+                    targets = single
                 if not targets:
                     continue
                 ev = re.sub(r"\s+", " ", clause.strip())[:140]
@@ -1921,7 +1969,7 @@ def apply_tranche_lifecycle(rows, prose):
                         t["maturity_extended"] = _clean(m.group(1))
                         t["lifecycle_evidence"] = ev
                     continue
-                if LC_ZERO_RE.search(clause):
+                if LC_ZERO_RE.search(clause) and not LC_SPECULATIVE_RE.search(clause):
                     for t in targets:
                         t["principal_loss_pct"] = 100.0
                         t["loss_basis"] = "stated"
