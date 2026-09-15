@@ -23,9 +23,11 @@ is validated, and everything still worth fixing, ordered by value per hour.
    - Residential Re 2019-2 Class 1: spread 22.75% (not "priced at 77.25%")
    - Merna Re II 2022-2: launch "$500 million" is WRONG (programme total);
      known open, see backlog 10.
-2. **Backlog 10 opens**: the Merna sibling-sum rule is the one with a clear
+2. **Backlog 3 (maturity)** round one done: 120 -> 354 stated maturities.
+   Human-check a few `stated_derived_mismatch` deals (stated date should win).
+3. **Backlog 10 opens**: the Merna sibling-sum rule is the one with a clear
    mechanism. Backlog 9 (spread) is closed; backlog 1 has two fewer pages.
-3. ~~Rename the project~~ done 2026-09-14.
+4. ~~Rename the project~~ done 2026-09-14.
 
 Everything is pushed as of 2026-09-15.
 
@@ -33,7 +35,7 @@ Everything is pushed as of 2026-09-15.
 
 - Full crawl done: 1,311 deals parsed; `raw/` and `data/` are gitignored under
   the Artemis licence rule (`DATA_POLICY.md`). Code is tracked, content is not.
-- `./.venv/bin/python tests/test_golden.py` — expect 1263/1263, offline.
+- `./.venv/bin/python tests/test_golden.py` — expect 1400/1400, offline.
 - `src/validate_dashboards.py` reproduces every publisher comparison. Issuance,
   trigger mix, EL and spread validate (spread: corr 0.90, -0.03pp after the
   2026-09-15 price-of-par fix). The offering size-change series is bracketed

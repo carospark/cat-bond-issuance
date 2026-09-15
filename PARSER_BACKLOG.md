@@ -34,13 +34,29 @@ class not the instance, pin it in `tests/test_golden.py`, mutation-test the pin.
   short. Overlaps with the 61 `tranche_count_matches_prose` undercounts.
   Start with deals where stated count > found count AND sum is short.
 
-## 3. Recall on maturity/term (~1 evening, high analysis value)
+## 3. Recall on maturity/term — round one done 2026-09-15
 
-850/1,311 deals have no maturity — mostly genuine (sampled 5/6 page-silent),
-but the sixth ("Successor X") had discount-note phrasing worth a look, and the
-maturities-dashboard comparison says we hold 69% of the $62.4bn forward
-schedule. Each recovered maturity directly improves the outstanding line in
-`net_supply.py`. Look for: "risk period ending", "notes due", "X-season".
+Was 120/1,311 deals with a stated maturity. The pages say it five other ways;
+all now read, in priority order (`_apply_patterns` stops at the first hit):
+"Notes due January 8, 2014", "due on", "term/protection/risk period ...
+(running/until/through/to) [the end of] Month YYYY", "expires in / due to end
+in". A day of the month is stripped so the value stays "Month YYYY". Three
+sentence classes are dropped before matching (`MATURITY_EXCLUDE_RE` +
+`CLASS_SCOPED_RE`): loss-development EXTENSIONS ("maturity extended again to
+December 6th 2018", which the lifecycle fields hold), a PREDECESSOR's expiry
+("Lakeside Re I ... expires ... so this deal seeks to replace it"), and one
+CLASS's term on a multi-class page. Result: 354 stated maturities,
+`maturity_scheduled` (stated, else issue + term) 489 -> 607 of 1,311, zero
+`maturity_not_after_issue` violations. Mutation-tested. Still open:
+
+- Per-class "Notes due <date>" lists (Montana Re 2010-1, Isosceles 2023):
+  every class carries the same date and the class veto drops them all. Adopt
+  the date when all classes agree.
+- `stated_derived_mismatch` is now a real signal (month ordinals, not
+  strings): where it fires the stated date wins and the term was approximate
+  ("three-year" issued March, matures June). 94 deals; read a few.
+- Remaining ~700 deals with neither: mostly page-silent (sampled 5/6 before
+  this round). Private deals are 332 of them.
 
 ## 4. Lifecycle extractor breadth (~1 evening)
 

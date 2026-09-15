@@ -55,6 +55,17 @@ IGNORED_LABELS = {"artemis.bm news coverage"}
 MONTHS = (r"(?:January|February|March|April|August|September|October|November|"
           r"December|June|July|Sept|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|"
           r"Nov|Dec)")
+# "May 2030", "January 8, 2014", "December 6th 2018": month, optional day, year.
+DATE_MY = MONTHS + r"(?:\s+\d{1,2}(?:st|nd|rd|th)?,?)?\s+\d{4}"
+# A maturity sentence that is not this deal's scheduled maturity: "have had
+# their maturity extended again to December 6th 2018" (Residential Re 2014-1,
+# a loss-development extension, held in the lifecycle fields), "Lakeside Re
+# I Ltd. cat bond expires at the end of Dec 2009 so this deal seeks to replace
+# it" (the predecessor's), "The riskier Class 11 tranche ... protection to the
+# end of May 2025, while the other two" (one class of three).
+MATURITY_EXCLUDE_RE = re.compile(
+    r"\bexten(?:d|ded|ding|sion)\b|\breplac\w+|\brenew\w+|\broll(?:ed|ing)? (?:over|into)",
+    re.IGNORECASE)
 
 # A settled-price anchor must not accept the first endpoint of a range.
 NOT_RANGE = r"(?!\s*(?:to|and|[-\u2013])\s*\d+(?:[.,]\d+)?\s*%)"
@@ -131,7 +142,27 @@ TIER2_PATTERNS = {
         # Closed month vocabulary: an open [A-Z][a-z]+ token happily matched
         # stopwords ("this new 2024", "the 2024") and filled the field with
         # nonsense at medium confidence. A fixed alternation cannot.
-        (r"matur\w+[^.]{0,40}?(" + MONTHS + r"\s+\d{4})", "strong"),
+        # Recall round 2026-09-15 (backlog 3): 120 of 1,311 deals had a
+        # stated maturity; the pages say it five other ways. Order is
+        # priority -- _apply_patterns stops at the first pattern that hits.
+        # Sentences about an EXTENSION, a deal being REPLACED, or one CLASS
+        # are dropped before matching (MATURITY_EXCLUDE_RE); the day of the
+        # month is stripped afterwards so the value stays "Month YYYY".
+        (r"matur\w+[^.]{0,40}?(" + DATE_MY + r")", "strong"),
+        # "Notes due January 8, 2014" (Montana Re 2010-1)
+        (r"notes? due\s+(?:on\s+)?(" + DATE_MY + r")", "strong"),
+        # "both due on January 8th 2019" (Resilience Re 1712)
+        (r"\bdue (?:on|in)\s+(" + DATE_MY + r")", "strong"),
+        # "a three year deal which will run until May 2013" (Johnston Re),
+        # "risk period runs through March 31st, 2001" (Gold Eagle), "a term
+        # of four years from November 2011 until November 2015" (Successor X)
+        (r"(?:term|protection|cover(?:age)?|risk[- ]period|reinsurance|period|deal|"
+         r"transaction|notes?)[^.]{0,45}?(?:running|runs|run|ending|ends|expir\w+)?"
+         r"\s*(?:to|until|through|till)\s+(?:the end of\s+)?(" + DATE_MY + r")", "strong"),
+        # "a three year deal due to end in June 2013" (Residential Re 2010),
+        # "a zero-coupon bond that expires in December 2014" (Dodeka II)
+        (r"(?:expir\w+|ends?|ending|terminat\w+|due to end)\s+(?:in|on|at the end of|at)\s+("
+         + DATE_MY + r")", "strong"),
     ],
     # NOTE: \d+ does not cross a decimal point, so "a 12.5-year term" matched
     # the "5" and reported a 5-year term. Ground-truth labelling caught this;
@@ -674,6 +705,11 @@ BENEFIT_RATIO_RE = re.compile(r"benefit ratio", re.IGNORECASE)
 RATIO_GUARDED = {"expected_loss", "attachment_probability", "exhaustion_probability"}
 
 
+def _strip_day(date_text):
+    """"December 6th 2018" / "January 8, 2014" -> "December 2018" / "January 2014"."""
+    return re.sub(r"\s+\d{1,2}(?:st|nd|rd|th)?,?(?=\s+\d{4})", "", date_text)
+
+
 def _spread_is_price(value):
     """A "spread" of 50% or more is a zero-coupon note's price of par.
 
@@ -709,6 +745,12 @@ def _apply_patterns(name, patterns, text, issue_year=None, own_series=frozenset(
                                   re.IGNORECASE)):
                 dropped.append(value + " (contribution share)")
                 continue
+            if name == "maturity_date":
+                sent = _sentence_at(text, m.start())
+                if MATURITY_EXCLUDE_RE.search(sent) or CLASS_SCOPED_RE.search(sent):
+                    dropped.append(value + " (extension/predecessor/class)")
+                    continue
+                value = _strip_day(value)
             if _is_backward_reference(_sentence_at(text, m.start()), issue_year, own_series):
                 dropped.append(value)
                 continue
@@ -1071,7 +1113,10 @@ def parse_deal(html, deal_url=None):
         record["maturity_date"]["confidence"] if stated
         else record["maturity_date_derived"]["confidence"],
         "stated" if stated else ("derived" if derived_mat else None))
-    if stated and derived_mat and stated != derived_mat:
+    # Compared as month ordinals: "June 2024" is "Jun 2024", and a string
+    # test flagged 100 such pairs as mismatches after the 2026-09-15 recall
+    # round (the derived date inherits the issue date's abbreviated month).
+    if stated and derived_mat and _month_ord(stated) != _month_ord(derived_mat):
         record["maturity_scheduled"]["flags"].append(
             f"stated_derived_mismatch:{stated}!={derived_mat}")
         record["maturity_scheduled"]["confidence"] = "low"

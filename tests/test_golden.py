@@ -110,6 +110,16 @@ PAGES = [
     "residential-reinsurance-2019-limited-series-2019-2",  # "priced at 77.25%, so a coupon equivalent of 22.75%"
     "matterhorn-re-ltd-series-2020-3",       # "settled at 90.5% of par"
     "gateway-re-ltd-series-2025-1",          # "zero-coupon pricing ... 93.75%"
+    # Maturity recall round (2026-09-15, backlog 3): five more phrasings,
+    # and the sentences that must NOT become the scheduled maturity.
+    "johnston-re-ltd",                       # "three year deal which will run until May 2013"
+    "successor-x-ltd-series-2011-3",         # "term of four years from November 2011 until November 2015"
+    "residential-reinsurance-2010-ltd",      # "three year deal due to end in June 2013"
+    "dodeka-ii",                             # "zero-coupon bond that expires in December 2014"
+    "gold-eagle-capital-ltd",                # "risk period runs through March 31st, 2001" -> day stripped
+    "residential-reinsurance-2014-ltd-series-2014-1",  # "maturity extended again to December 6th 2018"
+    "lakeside-re-ii-ltd",                    # "Lakeside Re I ... expires at the end of Dec 2009 so this deal seeks to replace it"
+    "residential-reinsurance-2024-limited-series-2024-1",  # "Class 11 tranche ... to the end of May 2025, while the other two"
 ]
 
 # Verified by reading the source prose; see notes for provenance.
@@ -283,6 +293,10 @@ TRANCHE_SUM_OK = {"triangle-re-2019-1-ltd", "atlantic-western-re-ltd",
 # absence of a specific wrong answer is what makes these guards non-vacuous:
 # "field is None" would pass on total extraction failure, and did.
 REJECT = {
+    # Maturity round: an extension, a predecessor's expiry, one class's term.
+    "residential-reinsurance-2014-ltd-series-2014-1": {"maturity_date": "December 2018"},
+    "lakeside-re-ii-ltd": {"maturity_date": "Dec 2009"},
+    "residential-reinsurance-2024-limited-series-2024-1": {"maturity_date": "May 2025"},
     # the 2019-1 predecessor's coupon, adopted as this deal's spread
     "residential-reinsurance-2020-limited-series-2020-1": {"spread_risk_margin": "8.25%"},
     # the LOW END of "guide pricing of 11.25% to 12.25%", not the settled 12%
@@ -301,6 +315,18 @@ REJECT = {
     # "coupon of 2.25% to 2.5%" is a range; 2.25% must come from the settled
     # sentence, and the evidence must not be the range.
     "lion-i-re-ltd": {"price_guidance": "2.25%"},
+}
+
+# Stated scheduled maturity, normalised to "Month YYYY".
+MATURITY = {
+    "johnston-re-ltd": "May 2013",
+    "successor-x-ltd-series-2011-3": "November 2015",
+    "residential-reinsurance-2010-ltd": "June 2013",
+    "dodeka-ii": "December 2014",
+    "gold-eagle-capital-ltd": "March 2001",     # "March 31st, 2001"
+    "residential-reinsurance-2014-ltd-series-2014-1": None,
+    "lakeside-re-ii-ltd": None,
+    "residential-reinsurance-2024-limited-series-2024-1": None,
 }
 
 # Deal-level size change: (direction, delta_pct) or None. Everglades used to
@@ -767,7 +793,7 @@ def unit_predicates():
 from parse_deal import (_each_scoped, LABELLED_NOTES_RE, COUNTED_TRANCHES_RE,  # noqa: E402
                         TRANCHE_PRONOUN_RE, AGGREGATE_RE, PREDECESSOR_ANAPHORA_RE,
                         sentences, _is_backward_reference, INITIAL_IDIOM_RE,
-                        _spread_is_price, TIER2_PATTERNS)
+                        _spread_is_price, TIER2_PATTERNS, MATURITY_EXCLUDE_RE, _strip_day)
 
 
 def unit_component_scope():
@@ -823,6 +849,17 @@ def unit_component_scope():
     check(f["value"] == "22.75%", "UNIT spread: price dropped, equivalent read", repr(f["value"]))
     check(any(x.startswith("discount_price_not_spread") for x in f["flags"]),
           "UNIT spread: dropped price is flagged", repr(f["flags"]))
+    for text, want in [
+        ("have had their maturity extended again to December 6th 2018.", True),
+        ("cat bond expires at the end of Dec 2009 so this deal seeks to replace it.", True),
+        ("It will be a three year deal due to end in June 2013.", False),
+        ("The risk period runs through March 31st, 2001.", False),
+    ]:
+        got = bool(MATURITY_EXCLUDE_RE.search(text))
+        check(got == want, f"UNIT maturity-exclude {text[:36]!r}", f"want={want} got={got}")
+    for raw, want in [("December 6th 2018", "December 2018"), ("January 8, 2014", "January 2014"),
+                      ("March 31st, 2001", "March 2001"), ("May 2030", "May 2030")]:
+        check(_strip_day(raw) == want, f"UNIT strip-day {raw}", repr(_strip_day(raw)))
     m = INITIAL_IDIOM_RE.search("This cat bond was initially marketed at \u20ac60m but closed at \u20ac75m")
     check(m is not None and m.group(1) == "\u20ac60m", "UNIT initial-idiom launch amount", repr(m and m.group(1)))
     check(_is_backward_reference("That deal afforded them $200m of cover", 2011, frozenset({"2011-1"})),
@@ -1033,6 +1070,10 @@ def main():
         if slug in TRANCHE_COUNT:
             check(len(rws) == TRANCHE_COUNT[slug], f"EXPECT tranche count {slug}",
                   f"want={TRANCHE_COUNT[slug]} got={len(rws)} {[r.get('tranche_id') for r in rws]}")
+        if slug in MATURITY:
+            got = rec["maturity_date"]["value"]
+            check(got == MATURITY[slug], f"EXPECT maturity {slug}",
+                  f"want={MATURITY[slug]!r} got={got!r}")
         if slug in SIZE_LAUNCH_REJECT:
             got = next((h["value"] for h in (rec["size_history"]["value"] or [])
                         if h["state"] == "launch"), None)
@@ -1119,7 +1160,7 @@ def main():
     # Pin the total. Guards are conditional on extracted data, so a regression
     # that empties a field silently removes its checks and the suite still
     # reports "all passed" on a smaller suite.
-    EXPECTED_CHECKS = 1263
+    EXPECTED_CHECKS = 1400
     if len(results) != EXPECTED_CHECKS:
         results.append((False, "GUARD check-count",
                         f"expected {EXPECTED_CHECKS} checks, ran {len(results)}"
