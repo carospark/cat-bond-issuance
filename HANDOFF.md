@@ -40,7 +40,7 @@ Everything is pushed as of 2026-09-15.
 
 - Full crawl done: 1,311 deals parsed; `raw/` and `data/` are gitignored under
   the Artemis licence rule (`DATA_POLICY.md`). Code is tracked, content is not.
-- `./.venv/bin/python tests/test_golden.py` — expect 1619/1619, offline.
+- `./.venv/bin/python tests/test_golden.py` — expect 1682/1682, offline.
 - `src/validate_dashboards.py` reproduces every publisher comparison. Issuance,
   trigger mix, EL and spread validate (spread: corr 0.90, -0.03pp after the
   2026-09-15 price-of-par fix). The offering size-change series is bracketed

@@ -406,7 +406,7 @@ def _each_scoped(text, start, end):
     are exposed" has its "each" a clause away, behind a comma.
     """
     before = text[max(0, start - 50):start]
-    after = text[end:end + 15]
+    after = text[end:end + 28]
     # "each series now targeting $262.5 million" (Kilimanjaro 2018-1): a
     # per-SERIES amount on a one-series entry is this deal's, not a part.
     if re.search(r"\beach (?:of the (?:two|three|four) )?series\b[^,;.]*$", before, re.IGNORECASE):
@@ -415,7 +415,8 @@ def _each_scoped(text, start, end):
     # each tranche corresponding to a single segregated account" (Eclipse Re
     # 2018-01A) is a total, and reading it as per-tranche produced +1010%.
     return bool(re.search(r"\beach\b[^,;.]*$", before, re.IGNORECASE)
-                or re.match(r"\s*(?:million|billion|bn|m|b)?\s*(?:in size\s+)?each\b",
+                # "$62.5 million of protection each" (Kilimanjaro 2018-1)
+                or re.match(r"\s*(?:million|billion|bn|m|b)?\s*(?:in size\s+|of \w+\s+)?each\b",
                             after, re.IGNORECASE))
 
 
@@ -1373,7 +1374,23 @@ REGULATORY_CLASS_RE = re.compile(
 # tranche called "Class OF". Tranche identifiers are letters/digits, never words.
 CLASS_STOPWORDS = {"OF", "THE", "AND", "FOR", "ARE", "WAS", "ITS", "ALL", "ANY",
                    "NEW", "ONE", "TWO", "NOT", "HAS", "CAN", "MAY", "BUT", "OUR",
-                   "SIZE", "WAS", "HAD", "WILL"}
+                   "SIZE", "WAS", "HAD", "WILL",
+                   # CLASS_RE is case-insensitive: "class is as yet unsized"
+                   # (Sanders Re III 2022-1) grew a "Class IS" row.
+                   "IS", "AS", "AT", "IN", "ON", "BY", "SO", "IF", "NO", "UP", "OR",
+                   "AN", "BE", "DO", "IT", "TO", "WE", "OFF", "OWN", "TOP", "LOW"}
+
+# A class that left the offering. "will not be issued at all" (Residential
+# Re 2020-1 Class 12), "was pulled from the issuance, so these notes are no
+# longer being offered" (Residential Re 2022-1 Class 10), "the two aggregate
+# tranches ... have now been dropped from this issuance" (Sanders III 2022-2
+# Class C, which still carried the $275m headline as its size).
+TRANCHE_WITHDRAWN_RE = re.compile(
+    r"will not be issued|no longer being offered|not being issued|"
+    r"being (?:pulled|withdrawn|dropped)\b|"
+    r"(?:pulled|dropped|withdrawn|removed) from (?:the |this )?(?:issuance|offering|deal|transaction)|"
+    r"(?:has|have|had) (?:now )?been (?:pulled|withdrawn|dropped|removed|cancelled)\b",
+    re.IGNORECASE)
 
 # The prose usually states its own structure. When we can find fewer tranches
 # than it claims, say so loudly rather than reporting the shortfall as fact.
@@ -1460,6 +1477,12 @@ def _tranche_windows(prose, issue_year=None, own_series=frozenset()):
                     or CLASS_RATING_RE.search(after)):
                 real.add(label)
                 break
+    # A bare label beside its own sub-labels is the group, not a tranche:
+    # "the Class A notes" on a page that sizes Class A-1 and Class A-2
+    # (Kilimanjaro 2018-1, Cerulean 2019-1) grew a phantom parent row.
+    parents = {lab for lab in real
+               if any(re.match(re.escape(lab) + r"-\d", other) for other in real)}
+    real -= parents
     hits = [m for m in hits if "Class " + m.group(1).upper() in real]
     if not hits:
         return []
@@ -1634,6 +1657,16 @@ def _bindings_by_label(prose):
         each = _per_tranche_amount(sentence)
         if each:
             out.setdefault("*EACH*", []).append(each)
+        # ONE label, plural: "Both of these Class A tranches ... are now set
+        # to secure $62.5 million of protection each" (Kilimanjaro 2018-1,
+        # whose tranches are Class A-1 and A-2). The group's per-tranche
+        # amount is each sub-label's candidate.
+        if len(labels) == 1 and re.search(r"\bClass\s+[A-Z0-9-]+\s+tranches\b", sentence, re.IGNORECASE):
+            lab = next(iter(labels))
+            for m in MONEY_RE.finditer(sentence):
+                if (_money_to_number(m.group(0)) or 0) >= 1e6 and _each_scoped(sentence, m.start(), m.end()):
+                    out.setdefault("*EACH:%s*" % lab, []).append(_clean(m.group(0)))
+                    break
     return out
 
 
@@ -1829,7 +1862,9 @@ def _reconcile_tranche_sizes(rows, ctx):
         for m in mentions:
             if m["kind"] == "size" and (m["scope"] or "").upper() == lab.upper():
                 cands.setdefault(m["value"], m["text"])
-        for v in (ctx.get("bindings") or {}).get("*EACH*", []):
+        parent = re.sub(r"-\d+[A-Z]?$", "", lab.upper())
+        for v in ((ctx.get("bindings") or {}).get("*EACH*", [])
+                  + (ctx.get("bindings") or {}).get("*EACH:%s*" % parent, [])):
             n = _money_to_number(v)
             if n and not (ctx.get("deal_total") and abs(n - ctx["deal_total"]) / ctx["deal_total"] <= 0.01):
                 cands.setdefault(n, v)      # a per-tranche "each" amount fits every label
@@ -1920,9 +1955,12 @@ def parse_tranches(record):
             row["tranche_size_flags"] = ";".join(
                 x for x in [row.get("tranche_size_flags"),
                             "tranche_sizes_unassignable"] if x)
-        elif label and not row.get("tranche_size_final") and re.search(
-                re.escape(label) + r"[^.]{0,120}?will not be issued",
+        elif label and re.search(
+                re.escape(label) + r"\b[^.]{0,120}?(?:" + TRANCHE_WITHDRAWN_RE.pattern + r")",
                 ctx["prose"], re.IGNORECASE):
+            # Withdrawn: no final size, whatever the window offered.
+            for key in ("tranche_size_final", "tranche_size_delta_pct"):
+                row[key] = None
             row["tranche_size_flags"] = ";".join(
                 x for x in [row.get("tranche_size_flags"), "tranche_not_issued"] if x)
         elif (label and not row.get("tranche_size_final")
@@ -2051,6 +2089,11 @@ def check_tranche_sum(record, rows):
         return None, "no deal size or no tranches"
     if "unit_missing" in record["size"]["flags"]:
         return None, "deal size has no unit"
+    # A withdrawn class contributes nothing: Residential Re 2020-1's Class 12
+    # "will not be issued", so Class 13 alone must equal the headline.
+    rows = [r for r in rows if "tranche_not_issued" not in (r.get("tranche_size_flags") or "")]
+    if not rows:
+        return None, "every tranche withdrawn"
     sizes = [r.get("tranche_size_final") for r in rows]
     if not all(sizes):
         return None, "incomplete tranche sizes"

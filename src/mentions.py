@@ -44,7 +44,9 @@ KIND_CUES = [
     ("retention", r"\bretention\b|\bfranchise\b"),
     ("term_loan", r"term loan"),
     ("layer", r"\blayer\b|\breinsurance towers?\b"),
-    ("payout", r"payout|paid out|principal reduction|loss(?:es)? of"),
+    # NOT "expected loss of 17.43%, were eventually confirmed as $37.5
+    # million in size" (Sanders III 2022-2): a modelled loss is not a payout.
+    ("payout", r"payout|paid out|principal reduction|(?<!expected )(?<!base )loss(?:es)? of"),
     ("trigger", r"trigger point|trigger value|trigger level|index value|"
                 r"index level|index trigger"),
     # Amounts that are somebody else's capital, not this deal's size. Each

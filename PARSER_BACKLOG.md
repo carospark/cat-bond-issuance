@@ -28,7 +28,7 @@ class not the instance, pin it in `tests/test_golden.py`, mutation-test the pin.
   Re 2013-2) and "4% of expected losses, followed by energy at 5.2%"
   (Tradewynd 2013-1). Read the rest of the list the same way.
 
-## 2. Sum-final mismatches — 45 -> 27 on 2026-09-15
+## 2. Sum-final mismatches — 45 -> 27 on 2026-09-15 (OK 1104 -> 1146)
 
 `tranche_sum_check == MISMATCH` in `deals.csv`. Read against their pages,
 the 45 were four families, two of them mechanisms and now fixed:
@@ -61,9 +61,22 @@ the 45 were four families, two of them mechanisms and now fixed:
   a tight forward form ("$X of/from the Class B notes") that wins over a
   label behind the amount. Spectrum 2017-1, Torrey Pines 2017-1 and
   Matterhorn 2026-3 still have no unique reconciling combination.
-- **Phantom tranches**: Sanders III 2022-2 Class C = the $275m total
-  ("prose says 2, parsed 3"), Bellemeade 2022-2's $358.4m ceiling, Radnor
-  2020-1 (5 vs 6). Overlaps the 81 `tranche_count_matches_prose` findings.
+- **Phantom and withdrawn tranches** (read 2026-09-15 from the 20 "parsed >
+  stated" count findings): bare parent labels beside their own sub-labels
+  ("the Class A tranches" on a page that sizes A-1 and A-2: Kilimanjaro
+  2018-1, Cerulean 2019-1) are dropped and their per-tranche "each" amount
+  routed to the sub-labels; "class is as yet unsized" no longer grows a
+  "Class IS" row (CLASS_RE is case-insensitive; function words added to
+  CLASS_STOPWORDS); a class the prose says was "pulled from the issuance",
+  "being pulled and not being issued" or "dropped from this issuance" is
+  `tranche_not_issued` with no size, and `check_tranche_sum` counts it as
+  zero (Residential Re 2020-1 / 2022-1, Integrity 2022-1). Sanders III
+  2022-2's Class C was real ("eventually confirmed as $37.5 million") and
+  lost to a payout cue firing on "expected loss of 17.43%"; fixed. Still
+  open: Bellemeade 2022-2's $358.4m ceiling as a tranche, twin-series pages
+  whose other series' tranches are listed alongside (Kilimanjaro 2018-1
+  stays n/a), and the Kilimanjaro II 2017 pages where "three tranches" means
+  three classes across two series.
 
 ## 3. Recall on maturity/term — round one done 2026-09-15
 

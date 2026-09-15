@@ -141,6 +141,11 @@ PAGES = [
     "3264-re-ltd-series-2025-1",             # "The Class A notes were priced to provide $100 million of cover"
     "tailwind-re-ltd-series-2017-1",         # "this tranche has now grown to $150 million", 130 chars after its label
     "bonanza-re-ltd-series-2023-1",          # "$70 million ... from the Class A ... notes, and $65 million from the Class B notes"
+    # Phantom and withdrawn tranches (2026-09-15).
+    "integrity-re-ltd-series-2022-1",        # "Class B tranche of notes being pulled and not being issued"
+    "residential-reinsurance-2022-limited-series-2022-1",  # "Class 10 ... was pulled from the issuance"
+    "kilimanjaro-re-ltd-series-2018-1",      # bare "Class A"/"Class B" beside A-1/A-2/B-1/B-2
+    "sanders-re-iii-ltd-series-2022-1",      # "class is as yet unsized" grew a "Class IS" row
 ]
 
 # Verified by reading the source prose; see notes for provenance.
@@ -427,7 +432,9 @@ SIZE_LAUNCH_REJECT = {
 
 # Exact tranche row count. Akibare 2020-1 is "a single tranche of Series
 # 2020-1 Class A notes"; the Class B it mentions belongs to Series 2018-1.
-TRANCHE_COUNT = {"akibare-re-pte-ltd-series-2020-1": 1}
+TRANCHE_COUNT = {"akibare-re-pte-ltd-series-2020-1": 1,
+                 "kilimanjaro-re-ltd-series-2018-1": 4,   # A-1, A-2, B-1, B-2; not the parent labels
+                 "sanders-re-iii-ltd-series-2022-1": 3}   # A, B, C; not "Class IS"
 
 # Flags that must be present: the "why" beside an honest None.
 FLAGS = {
@@ -478,6 +485,12 @@ TRANCHE_FIELDS = {
                                       "Class C": {"tranche_size_final": "$100 million"}},
     "bonanza-re-ltd-series-2023-1": {"Class A": {"tranche_size_final": "$70 million"},
                                      "Class B": {"tranche_size_final": "$65 million"}},
+    # "expected loss of 17.43%, were eventually confirmed as $37.5 million in
+    # size": a modelled loss is not a payout cue; 150 + 100 + 37.5 = 287.5.
+    "sanders-re-iii-ltd-series-2022-2": {"Class C": {"tranche_size_final": "$37.5 million"}},
+    # Withdrawn classes carry no size and the sum check counts them as zero.
+    "integrity-re-ltd-series-2022-1": {"Class B": {"tranche_size_final": None}},
+    "residential-reinsurance-2022-limited-series-2022-1": {"Class 10": {"tranche_size_final": None}},
 }
 
 # Deal-level size history. A state here must be the DEAL's size, never a
@@ -845,7 +858,7 @@ from parse_deal import (_each_scoped, LABELLED_NOTES_RE, COUNTED_TRANCHES_RE,  #
                         sentences, _is_backward_reference, INITIAL_IDIOM_RE,
                         _spread_is_price, TIER2_PATTERNS, MATURITY_EXCLUDE_RE, _strip_day,
                         _series_tokens, LC_ZERO_RE, LC_SPECULATIVE_RE, _bindings_by_label,
-                        TRANCHE_DROPPED_RE, _per_tranche_amount)
+                        TRANCHE_DROPPED_RE, _per_tranche_amount, TRANCHE_WITHDRAWN_RE, CLASS_STOPWORDS)
 from mentions import extract as mentions_extract  # noqa: E402
 
 
@@ -941,6 +954,20 @@ def unit_component_scope():
         check(got == want, f"UNIT mention kind/scope {text[:34]!r}", f"want={want} got={got}")
     b = _bindings_by_label("Both the Class A and Class B tranche of notes are sized at EUR 25m each.")
     check("*EACH*" not in b and b.get("CLASS A") == ["EUR 25m"], "UNIT bindings labelled each stays labelled", repr(b))
+    for text, want in [
+        ("resulted in the riskier Class B tranche of notes being pulled and not being issued", True),
+        ("the Class 10, riskiest layer of USAA's latest catastrophe bond was pulled from the issuance", True),
+        ("the two aggregate tranches have now been dropped from this issuance", True),
+        ("price guidance has dropped to 5.25% for the Class A notes", False),
+    ]:
+        check(bool(TRANCHE_WITHDRAWN_RE.search(text)) == want, f"UNIT tranche-withdrawn {text[:30]!r}")
+    check("IS" in CLASS_STOPWORDS and "TO" in CLASS_STOPWORDS, "UNIT class stopwords cover 'class is'")
+    b = _bindings_by_label("Both of these Class A tranches (four-year and five-year) are now set to secure "
+                           "Everest Re $62.5 million of protection each and the price guidance has plummeted.")
+    check(b.get("*EACH:CLASS A*") == ["$62.5 million"], "UNIT bindings parent-group each", repr(b))
+    got = [(m["value"] / 1e6, m["kind"]) for m in mentions_extract(
+        "which have a particularly high initial expected loss of 17.43%, were eventually confirmed as $37.5 million in size")]
+    check(got == [(37.5, "size")], "UNIT 'expected loss of' is not a payout cue", repr(got))
     for text, want in [
         ("the Class B notes were pulled from the offering", True),
         ("Class 12 notes will not be issued at all", True),
@@ -1266,7 +1293,7 @@ def main():
     # Pin the total. Guards are conditional on extracted data, so a regression
     # that empties a field silently removes its checks and the suite still
     # reports "all passed" on a smaller suite.
-    EXPECTED_CHECKS = 1619
+    EXPECTED_CHECKS = 1682
     if len(results) != EXPECTED_CHECKS:
         results.append((False, "GUARD check-count",
                         f"expected {EXPECTED_CHECKS} checks, ran {len(results)}"
