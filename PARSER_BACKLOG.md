@@ -28,17 +28,39 @@ class not the instance, pin it in `tests/test_golden.py`, mutation-test the pin.
   Re 2013-2) and "4% of expected losses, followed by energy at 5.2%"
   (Tradewynd 2013-1). Read the rest of the list the same way.
 
-## 2. The 49 sum-final mismatches (~2 evenings, or accept)
+## 2. Sum-final mismatches — 45 -> 37 on 2026-09-15
 
-`tranche_sum_check == MISMATCH` in `deals.csv`. Spot-checks say two families:
+`tranche_sum_check == MISMATCH` in `deals.csv`. Read against their pages,
+the 45 were four families, two of them mechanisms and now fixed:
 
-- **Headline-basis**: Tier-1 "Size" includes term loans (Merna, +$122m) or
-  excludes swaps (IBRD), so parts *correctly* fail to equal it. Right fix is
-  representation, not parsing: `headline_basis` + `notes_principal` +
-  `other_instruments` columns (Fable round-4 design note; partially built).
-- **Invisible tranches**: a class the label detector never finds, so the sum is
-  short. Overlaps with the 61 `tranche_count_matches_prose` undercounts.
-  Start with deals where stated count > found count AND sum is short.
+- **Stale per-tranche finals** (Sakura 2021-1, Blue Ridge 2023-1, Tomoni
+  2024-1, Hypatia 2020-1, Acorn 2024-1): the upsizing is stated for all
+  tranches at once -- "each tranche now targeting $200 million", "Both
+  tranches of notes priced at $100 million", "the two $150 million
+  tranches" -- with no class label, so no tranche window saw it.
+  `_per_tranche_amount` reads the clause (each-scoped amount, "both/all
+  tranches", counted tranches), binds it as `*EACH*`, and the parts-vs-whole
+  solver offers it to every class. Only a unique reconciling combination is
+  applied.
+- **The headline as a tranche** (Chartwell 2025-1 Class C = $330m, Compass
+  Re II Class A = $300m, East Lane VII both classes = $150m, Mayflower
+  Class A = $150m): `equals_deal_total_accepted` existed for Residential Re
+  2020-1, where Class 12 "will not be issued" and the total IS Class 13.
+  Now gated on a dropped-class cue (`TRANCHE_DROPPED_RE`); without one the
+  tranche is an honest None and the sum is n/a.
+- **Headline-basis** (unchanged): mortgage ILS with exact amounts vs a
+  rounded headline (Bellemeade, Radnor, Eagle, Oaktown, Home Re), IBRD
+  FONDEN 2020, Horse Capital. Representation, not parsing: `headline_basis`
+  + `notes_principal` + `other_instruments` columns (partially built).
+- **Still stuck finals with a class label** (Tailwind 2017-1, 3264 2025-1
+  "The Class A notes were priced to provide $100 million of cover", Bonanza
+  2023-1 "$70 million of reinsurance secured from the Class A notes",
+  Torrey Pines 2017-1, Spectrum 2017-1, Matterhorn 2026-3): the final is
+  stated in a form the label binder does not read ("priced to provide $X",
+  "$X ... secured from the Class A notes"). Next mechanism.
+- **Phantom tranches**: Sanders III 2022-2 Class C = the $275m total
+  ("prose says 2, parsed 3"), Bellemeade 2022-2's $358.4m ceiling, Radnor
+  2020-1 (5 vs 6). Overlaps the 81 `tranche_count_matches_prose` findings.
 
 ## 3. Recall on maturity/term — round one done 2026-09-15
 

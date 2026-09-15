@@ -348,6 +348,17 @@ CANCELLED_RE = re.compile(
     r"\b(?:has been cancelled|was cancelled|been (?:pulled|withdrawn)|"
     r"was withdrawn|did not (?:proceed|complete)|was not completed|"
     r"not to proceed|will not (?:be issued|proceed))\b", re.IGNORECASE)
+# A class that left the offering, so the deal total CAN be one class's size:
+# "Class 12 ... will not be issued at all" (Residential Re 2020-1), "the
+# Class B notes were pulled" (Integrity 2022-1). Without such a cue the deal
+# total is never a tranche -- Chartwell 2025-1's Class C, Compass Re II's
+# Class A and East Lane VII's both classes were the $330m / $300m / $150m
+# headline, and each broke parts-vs-whole.
+TRANCHE_DROPPED_RE = re.compile(
+    r"(?:class|tranche|notes)[^.]{0,80}?\b(?:dropped|pulled|withdrawn|removed|"
+    r"not (?:be )?issued|cancelled|shelved)\b|"
+    r"\b(?:dropped|pulled|withdrawn|removed|cancelled)\b[^.]{0,60}?(?:class|tranche)",
+    re.IGNORECASE)
 
 PRIVATE_RE = re.compile(
     r"\bprivate(?:ly)?[- ](?:placed|placement|cat(?:astrophe)? bond|ILS|offering|"
@@ -1554,6 +1565,31 @@ FORWARD_BOUND_RE = re.compile(
     re.IGNORECASE)
 
 
+def _per_tranche_amount(sentence):
+    """The one amount a sentence states PER tranche, or None. Clause-scoped
+    (but/while/;) and only for clauses that name no class."""
+    for clause in re.split(r"\bbut\b|\bwhile\b|;", sentence):
+        if CLASS_RE.search(clause):
+            continue
+        m = COUNTED_TRANCHES_RE.search(clause)
+        if m:
+            return _clean(MONEY_RE.search(m.group(0)).group(0))
+        amounts = [m for m in MONEY_RE.finditer(clause)
+                   if (_money_to_number(m.group(0)) or 0) >= 1e6]
+        if not amounts:
+            continue
+        # "lifted to $400 million, with the two tranches both increasing to
+        # $200 million each" (Blue Ridge 2023-1): the each-scoped amount is
+        # the per-tranche one, whatever else the clause states.
+        each = [m for m in amounts if _each_scoped(clause, m.start(), m.end())]
+        if len(each) == 1:
+            return _clean(each[0].group(0))
+        if len(amounts) == 1 and re.search(
+                r"\b(?:both|all) (?:of the )?(?:\w+ )?tranches\b", clause, re.IGNORECASE):
+            return _clean(amounts[0].group(0))
+    return None
+
+
 def _bindings_by_label(prose):
     """{label: [amounts]} for every "AMOUNT [tranche of] Class X" in the prose.
 
@@ -1578,17 +1614,26 @@ def _bindings_by_label(prose):
     # Shared-subject constructions: "Both the Class A and Class B tranche of
     # notes are sized at EUR 25m each" states ONE amount that belongs to BOTH.
     for sentence in sentences(prose or ""):
-        if not re.search(r"\beach\b", sentence, re.IGNORECASE):
+        if not re.search(r"\beach\b|\b(?:both|all) (?:of the )?(?:\w+ )?tranches\b", sentence, re.IGNORECASE) \
+                and not COUNTED_TRANCHES_RE.search(sentence):
             continue
         labels = {("Class " + g).upper() for g in CLASS_RE.findall(sentence)
                   if g.upper() not in CLASS_STOPWORDS}
-        if len(labels) < 2:
-            continue
         amounts = [x for x in MONEY_RE.findall(sentence)
                    if (_money_to_number(x) or 0) >= 1e6]
-        if len(amounts) == 1:
+        if len(labels) >= 2 and len(amounts) == 1:
             for lab in labels:
                 out.setdefault(lab, []).append(_clean(amounts[0]))
+        # No labels in the clause: "each tranche now targeting $200 million
+        # of coverage, for total ... $400 million" (Sakura 2021-1), "Both
+        # tranches of notes priced at $100 million in size, while the Class A
+        # notes priced at 3.25%" (Tomoni 2024-1), "the two $150 million
+        # tranches of notes" (Hypatia). The per-tranche amount is EVERY
+        # class's candidate; the parts-vs-whole solver decides. Keyed
+        # "*EACH*" because the labels are not known here.
+        each = _per_tranche_amount(sentence)
+        if each:
+            out.setdefault("*EACH*", []).append(each)
     return out
 
 
@@ -1715,10 +1760,13 @@ def _size_multi(label, text, ctx):
             sizes.append((v, "stated"))
         if sizes:
             extra.append("size_from_label_binding")
-    if not sizes and dropped:
+    if not sizes and dropped and (TRANCHE_DROPPED_RE.search(ctx.get("prose") or "")
+                                  or CANCELLED_RE.search(ctx.get("prose") or "")):
         # The only candidate was rejected for equalling the deal total. On
         # ResRe 2020 that total IS Class 13's size, because Class 12 "will not
         # be issued at all". Refusing to report it created a phantom gap.
+        # Gated on a dropped-class cue (2026-09-15): without one, the total
+        # is the headline, and accepting it broke parts-vs-whole on 5 deals.
         sizes, _s, _d = _mine_sizes(label, text, ctx, exclude_total=False)
         if sizes:
             extra.append("equals_deal_total_accepted")
@@ -1781,6 +1829,10 @@ def _reconcile_tranche_sizes(rows, ctx):
         for m in mentions:
             if m["kind"] == "size" and (m["scope"] or "").upper() == lab.upper():
                 cands.setdefault(m["value"], m["text"])
+        for v in (ctx.get("bindings") or {}).get("*EACH*", []):
+            n = _money_to_number(v)
+            if n and not (ctx.get("deal_total") and abs(n - ctx["deal_total"]) / ctx["deal_total"] <= 0.01):
+                cands.setdefault(n, v)      # a per-tranche "each" amount fits every label
         if not cands:
             return                       # incomplete: nothing to reconcile
         by_label[lab] = cands

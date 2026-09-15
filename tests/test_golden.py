@@ -128,6 +128,14 @@ PAGES = [
     # Backlog 4 (lifecycle): a single unlabelled tranche, settled total loss.
     "artex-sac-limited-silver-crane-notes",  # "attached the notes and eroded their full principal"
     "ibrd-car-111-112",                      # "would face a 100% loss of principal" is a forecast, not a loss
+    # Backlog 2 (2026-09-15): the deal total is never a tranche without a
+    # dropped-class cue; an unlabelled "each tranche ... $X" fits every class.
+    "chartwell-re-ltd-series-2025-1",        # Class C read the $330m headline
+    "compass-re-ii-ltd-series-2015-1",       # Class A read the $300m headline
+    "sakura-re-ltd-series-2021-1",           # "each tranche now targeting $200 million"
+    "blue-ridge-re-ltd-series-2023-1",       # same, via the solver
+    "tomoni-re-pte-ltd-series-2024-1",       # "Both tranches of notes priced at $100 million in size, while the Class A ..."
+    "hypatia-ltd-series-2020-1",             # "the two $150 million tranches of notes"
 ]
 
 # Verified by reading the source prose; see notes for provenance.
@@ -449,6 +457,16 @@ TRANCHE_FIELDS = {
     # a hedged "would face a 100% loss" must stay None.
     "artex-sac-limited-silver-crane-notes": {None: {"principal_loss_pct": 100.0}},
     "ibrd-car-111-112": {"Class B": {"principal_loss_pct": None}},
+    # Backlog 2: parts-vs-whole.
+    "chartwell-re-ltd-series-2025-1": {"Class C": {"tranche_size_final": None}},
+    "compass-re-ii-ltd-series-2015-1": {"Class A": {"tranche_size_final": None}},
+    "sakura-re-ltd-series-2021-1": {"Class A": {"tranche_size_final": "$200 million"},
+                                    "Class B": {"tranche_size_final": "$200 million"}},
+    "blue-ridge-re-ltd-series-2023-1": {"Class A": {"tranche_size_final": "$200 million"}},
+    "tomoni-re-pte-ltd-series-2024-1": {"Class A": {"tranche_size_final": "$100 million"},
+                                        "Class B": {"tranche_size_final": "$100 million"}},
+    "hypatia-ltd-series-2020-1": {"Class A": {"tranche_size_final": "$150 million"},
+                                  "Class B": {"tranche_size_final": "$150 million"}},
 }
 
 # Deal-level size history. A state here must be the DEAL's size, never a
@@ -815,7 +833,8 @@ from parse_deal import (_each_scoped, LABELLED_NOTES_RE, COUNTED_TRANCHES_RE,  #
                         TRANCHE_PRONOUN_RE, AGGREGATE_RE, PREDECESSOR_ANAPHORA_RE,
                         sentences, _is_backward_reference, INITIAL_IDIOM_RE,
                         _spread_is_price, TIER2_PATTERNS, MATURITY_EXCLUDE_RE, _strip_day,
-                        _series_tokens, LC_ZERO_RE, LC_SPECULATIVE_RE)
+                        _series_tokens, LC_ZERO_RE, LC_SPECULATIVE_RE, _bindings_by_label,
+                        TRANCHE_DROPPED_RE, _per_tranche_amount)
 
 
 def unit_component_scope():
@@ -886,6 +905,25 @@ def unit_component_scope():
         ("it attached the notes and eroded their full principal, providing Toa Re", False),
     ]:
         check(bool(LC_SPECULATIVE_RE.search(text)) == want, f"UNIT lc-speculative {text[:30]!r}")
+    b = _bindings_by_label("The target has been doubled, with each tranche now targeting $200 million "
+                           "of coverage, for total reinsurance protection of $400 million.")
+    check(b.get("*EACH*") == ["$200 million"], "UNIT bindings *EACH* unlabelled per-tranche amount", repr(b))
+    for text, want in [
+        ("Both tranches of notes priced at $100 million in size, while the Class A notes priced at 3.25%.", "$100 million"),
+        ("Convex secured the upsized $300 million of protection, with the two $150 million tranches of notes issued.", "$150 million"),
+        ("the deal offers $200 million across the two tranches of notes", None),
+        ("comes out of the blocks at $300m in size, split into two tranches of notes, each of which", None),
+    ]:
+        got = _per_tranche_amount(text)
+        check(got == want, f"UNIT per-tranche amount {text[:34]!r}", f"want={want!r} got={got!r}")
+    b = _bindings_by_label("Both the Class A and Class B tranche of notes are sized at EUR 25m each.")
+    check("*EACH*" not in b and b.get("CLASS A") == ["EUR 25m"], "UNIT bindings labelled each stays labelled", repr(b))
+    for text, want in [
+        ("the Class B notes were pulled from the offering", True),
+        ("Class 12 notes will not be issued at all", True),
+        ("the target issuance size has increased to $330 million", False),
+    ]:
+        check(bool(TRANCHE_DROPPED_RE.search(text)) == want, f"UNIT tranche-dropped {text[:30]!r}")
     for v, want in [("77.25%", True), ("90.5%", True), ("22.75%", False), ("6,25%", False)]:
         check(_spread_is_price(v) == want, f"UNIT spread-is-price {v}", f"want={want}")
     f = _apply_patterns("spread_risk_margin", TIER2_PATTERNS["spread_risk_margin"],
@@ -1205,7 +1243,7 @@ def main():
     # Pin the total. Guards are conditional on extracted data, so a regression
     # that empties a field silently removes its checks and the suite still
     # reports "all passed" on a smaller suite.
-    EXPECTED_CHECKS = 1478
+    EXPECTED_CHECKS = 1568
     if len(results) != EXPECTED_CHECKS:
         results.append((False, "GUARD check-count",
                         f"expected {EXPECTED_CHECKS} checks, ran {len(results)}"
