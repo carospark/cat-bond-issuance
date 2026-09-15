@@ -71,7 +71,15 @@ KIND_CUES = [
                     r"[^$\u20ac\u00a3]{0,30}\b(?:which|that|was|were)\b"),
     ("size", r"in size|size of|sized at|tranche of|of notes|of cat bond notes|"
              r"issuance of|of reinsurance|of protection|of capital|"
-             r"secure|seeking|sought|targeted|priced at|settled at|finalis"),
+             r"secure|seeking|sought|targeted|priced at|settled at|finalis|"
+             # 2026-09-15, backlog 2: finals the label binder never read.
+             # "priced to provide $100 million of cover" (3264 Re 2025-1),
+             # "has now grown to $150 million" / "upsized to offer $150
+             # million of notes" (Tailwind 2017-1), "launched as a $125
+             # million offering".
+             r"of cover\b|of coverage|of retro|offering|grown to|grew to|"
+             r"upsized to|increased to|lifted to|launched (?:at|as)|"
+             r"priced to provide|to provide|of class\b"),
 ]
 
 MONEY = re.compile(
@@ -180,8 +188,27 @@ def classify(text, pos, end):
 
 
 def scope_of(text, pos):
-    """The Class label governing this position, or None for deal scope."""
-    before = text[max(0, pos - 120):pos]
+    """The Class label governing this position, or None for deal scope.
+
+    Backward within the sentence (not a fixed 120 chars: "The Class A
+    tranche ... were launched ... as a $125 million offering, but this
+    tranche has now grown to $150 million" puts the final 130 chars after
+    its label, Tailwind 2017-1), else forward to a label the amount is OF or
+    FROM: "$65 million from the Class B notes" (Bonanza 2023-1), "The $150
+    million of Class A ... notes" (Spectrum 2017-1).
+    """
+    # The tight forward form wins: "$70 million ... from the Class A notes,
+    # and $65 million from the Class B notes" has Class A behind the second
+    # amount, but "from the Class B" is what governs it.
+    after = text[pos:pos + 70]
+    m = re.match(r"[^.;,]{0,40}?\b(?:of|from|for)\s+(?:the\s+)?(?:\w+\s+){0,3}?"
+                 r"Class\s+([A-Z]{1,3}-\d+[A-Z]?|[A-Z]{1,3}\b|\d{1,2}\b)", after, re.IGNORECASE)
+    if m:
+        return "Class " + m.group(1).upper()
+    before = text[max(0, pos - 300):pos]
+    cut = max(before.rfind(". "), before.rfind("; "))
+    if cut >= 0:
+        before = before[cut + 2:]
     hits = list(CLASS_RE.finditer(before))
     return ("Class " + hits[-1].group(1).upper()) if hits else None
 

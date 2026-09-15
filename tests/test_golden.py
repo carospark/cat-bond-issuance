@@ -136,6 +136,11 @@ PAGES = [
     "blue-ridge-re-ltd-series-2023-1",       # same, via the solver
     "tomoni-re-pte-ltd-series-2024-1",       # "Both tranches of notes priced at $100 million in size, while the Class A ..."
     "hypatia-ltd-series-2020-1",             # "the two $150 million tranches of notes"
+    # ... and finals the label binder did not read (mentions.py size cues /
+    # sentence-scoped, forward-first class scope).
+    "3264-re-ltd-series-2025-1",             # "The Class A notes were priced to provide $100 million of cover"
+    "tailwind-re-ltd-series-2017-1",         # "this tranche has now grown to $150 million", 130 chars after its label
+    "bonanza-re-ltd-series-2023-1",          # "$70 million ... from the Class A ... notes, and $65 million from the Class B notes"
 ]
 
 # Verified by reading the source prose; see notes for provenance.
@@ -467,6 +472,12 @@ TRANCHE_FIELDS = {
                                         "Class B": {"tranche_size_final": "$100 million"}},
     "hypatia-ltd-series-2020-1": {"Class A": {"tranche_size_final": "$150 million"},
                                   "Class B": {"tranche_size_final": "$150 million"}},
+    "3264-re-ltd-series-2025-1": {"Class A": {"tranche_size_final": "$100 million"},
+                                  "Class B": {"tranche_size_final": "$100 million"}},
+    "tailwind-re-ltd-series-2017-1": {"Class A": {"tranche_size_final": "$150 million"},
+                                      "Class C": {"tranche_size_final": "$100 million"}},
+    "bonanza-re-ltd-series-2023-1": {"Class A": {"tranche_size_final": "$70 million"},
+                                     "Class B": {"tranche_size_final": "$65 million"}},
 }
 
 # Deal-level size history. A state here must be the DEAL's size, never a
@@ -835,6 +846,7 @@ from parse_deal import (_each_scoped, LABELLED_NOTES_RE, COUNTED_TRANCHES_RE,  #
                         _spread_is_price, TIER2_PATTERNS, MATURITY_EXCLUDE_RE, _strip_day,
                         _series_tokens, LC_ZERO_RE, LC_SPECULATIVE_RE, _bindings_by_label,
                         TRANCHE_DROPPED_RE, _per_tranche_amount)
+from mentions import extract as mentions_extract  # noqa: E402
 
 
 def unit_component_scope():
@@ -916,6 +928,17 @@ def unit_component_scope():
     ]:
         got = _per_tranche_amount(text)
         check(got == want, f"UNIT per-tranche amount {text[:34]!r}", f"want={want!r} got={got!r}")
+    for text, want in [
+        ("with $70 million of reinsurance secured from the Class A per-occurrence notes, and $65 million from the Class B notes.",
+         [(70.0, "size", "Class A"), (65.0, "size", "Class B")]),
+        ("The Class A notes were priced to provide $100 million of cover, at a risk interest spread of 21.25%.",
+         [(100.0, "size", "Class A")]),
+        ("The Class A tranche of Series 2017-1 notes were launched to investors as a $125 million offering, "
+         "but this tranche has now grown to $150 million we understand.",
+         [(125.0, "size", "Class A"), (150.0, "size", "Class A")]),
+    ]:
+        got = [(m["value"] / 1e6, m["kind"], m["scope"]) for m in mentions_extract(text)]
+        check(got == want, f"UNIT mention kind/scope {text[:34]!r}", f"want={want} got={got}")
     b = _bindings_by_label("Both the Class A and Class B tranche of notes are sized at EUR 25m each.")
     check("*EACH*" not in b and b.get("CLASS A") == ["EUR 25m"], "UNIT bindings labelled each stays labelled", repr(b))
     for text, want in [
@@ -1243,7 +1266,7 @@ def main():
     # Pin the total. Guards are conditional on extracted data, so a regression
     # that empties a field silently removes its checks and the suite still
     # reports "all passed" on a smaller suite.
-    EXPECTED_CHECKS = 1568
+    EXPECTED_CHECKS = 1619
     if len(results) != EXPECTED_CHECKS:
         results.append((False, "GUARD check-count",
                         f"expected {EXPECTED_CHECKS} checks, ran {len(results)}"

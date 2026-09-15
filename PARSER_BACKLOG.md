@@ -28,7 +28,7 @@ class not the instance, pin it in `tests/test_golden.py`, mutation-test the pin.
   Re 2013-2) and "4% of expected losses, followed by energy at 5.2%"
   (Tradewynd 2013-1). Read the rest of the list the same way.
 
-## 2. Sum-final mismatches — 45 -> 37 on 2026-09-15
+## 2. Sum-final mismatches — 45 -> 27 on 2026-09-15
 
 `tranche_sum_check == MISMATCH` in `deals.csv`. Read against their pages,
 the 45 were four families, two of them mechanisms and now fixed:
@@ -52,12 +52,15 @@ the 45 were four families, two of them mechanisms and now fixed:
   rounded headline (Bellemeade, Radnor, Eagle, Oaktown, Home Re), IBRD
   FONDEN 2020, Horse Capital. Representation, not parsing: `headline_basis`
   + `notes_principal` + `other_instruments` columns (partially built).
-- **Still stuck finals with a class label** (Tailwind 2017-1, 3264 2025-1
-  "The Class A notes were priced to provide $100 million of cover", Bonanza
-  2023-1 "$70 million of reinsurance secured from the Class A notes",
-  Torrey Pines 2017-1, Spectrum 2017-1, Matterhorn 2026-3): the final is
-  stated in a form the label binder does not read ("priced to provide $X",
-  "$X ... secured from the Class A notes"). Next mechanism.
+- **Finals the label binder did not read** (3264 2025-1 "The Class A notes
+  were priced to provide $100 million of cover", Tailwind 2017-1 "this
+  tranche has now grown to $150 million" 130 chars after its label, Bonanza
+  2023-1 "$65 million from the Class B notes"): fixed in `mentions.py` --
+  size cues for "priced to provide / grown to / upsized to / offering /
+  of cover", class scope bounded by the sentence rather than 120 chars, and
+  a tight forward form ("$X of/from the Class B notes") that wins over a
+  label behind the amount. Spectrum 2017-1, Torrey Pines 2017-1 and
+  Matterhorn 2026-3 still have no unique reconciling combination.
 - **Phantom tranches**: Sanders III 2022-2 Class C = the $275m total
   ("prose says 2, parsed 3"), Bellemeade 2022-2's $358.4m ceiling, Radnor
   2020-1 (5 vs 6). Overlaps the 81 `tranche_count_matches_prose` findings.

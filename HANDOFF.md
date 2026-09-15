@@ -30,8 +30,8 @@ is validated, and everything still worth fixing, ordered by value per hour.
    source typo (Vita Capital VI) and one window bleed (Vitality Re VII).
    Backlog 4 is measured (`src/crosscheck_losses.py`): 1 of 40 settled
    losses is read from the page; the partial-loss remainder phrasing is next.
-   Backlog 2: two of four mismatch families fixed; "priced to provide $X"
-   label binding is the next mechanism.
+   Backlog 2: three of four mismatch families fixed; what is left is
+   headline-basis representation and phantom tranches.
 4. ~~Rename the project~~ done 2026-09-14.
 
 Everything is pushed as of 2026-09-15.
@@ -40,7 +40,7 @@ Everything is pushed as of 2026-09-15.
 
 - Full crawl done: 1,311 deals parsed; `raw/` and `data/` are gitignored under
   the Artemis licence rule (`DATA_POLICY.md`). Code is tracked, content is not.
-- `./.venv/bin/python tests/test_golden.py` — expect 1568/1568, offline.
+- `./.venv/bin/python tests/test_golden.py` — expect 1619/1619, offline.
 - `src/validate_dashboards.py` reproduces every publisher comparison. Issuance,
   trigger mix, EL and spread validate (spread: corr 0.90, -0.03pp after the
   2026-09-15 price-of-par fix). The offering size-change series is bracketed
