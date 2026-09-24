@@ -3,6 +3,29 @@
 Read `PARSER_BACKLOG.md` first. It is the current state: what is parsed, what
 is validated, and everything still worth fixing, ordered by value per hour.
 
+## Takeover checkpoint (2026-09-23)
+
+- Recovered the uncommitted patch left after `10ff45f`. Compact labels now
+  canonicalise before binding (`A1`/`A-1`, `M1-A`/`M-1A`) without changing the
+  uppercase key contract used by the size solver. Integrity Re III 2025-1 and
+  Bellemeade Re 2020-1 are pinned end to end.
+- Percentage changes no longer enter `spread_risk_margin`: Everglades II
+  2015-1's "upsized by 20%" and Ibis Re II 2013-1's "increase in pricing of
+  6.7%" are rejected. A spread-vs-guidance plausibility warning is the backstop.
+- `./.venv/bin/python tests/test_golden.py` is **1759/1759**, offline. Four
+  mutations (compact-label grammar, each spread exclusion, and the validator
+  backstop) all made the suite fail before the good code was restored.
+- Full local bundle rebuilt from cache: 1,311 deals, 2,051 tranche rows, 272
+  validation findings; tranche sums are 1,147 OK / 28 mismatch / 136 n/a.
+  Publisher validation is unchanged at displayed precision: spread corr 0.89,
+  mean difference -0.03pp; size-change readings remain corr 0.74 / 0.69.
+- New visible open: the guidance backstop flags both duplicated Kilimanjaro III
+  Re 2019 entries. Class B-2 has the correct 9.5% settled spread but inherited
+  Class A's 15%-16% guidance; its own guidance is 8.75%-9.75%. Fix the grouped
+  cross-series label binding rather than suppressing the warning.
+
+The current working tree is tested but not committed or pushed.
+
 ## NEXT — start here (set 2026-09-15)
 
 1. **Human-check** these against their Artemis pages. Round one (launch
@@ -34,13 +57,14 @@ is validated, and everything still worth fixing, ordered by value per hour.
    headline-basis representation and phantom tranches.
 4. ~~Rename the project~~ done 2026-09-14.
 
-Everything is pushed as of 2026-09-15.
+Everything through `10ff45f` is pushed as of 2026-09-15; see the takeover
+checkpoint above for the current uncommitted work.
 
 ## State (2026-09-15)
 
 - Full crawl done: 1,311 deals parsed; `raw/` and `data/` are gitignored under
   the Artemis licence rule (`DATA_POLICY.md`). Code is tracked, content is not.
-- `./.venv/bin/python tests/test_golden.py` — expect 1682/1682, offline.
+- `./.venv/bin/python tests/test_golden.py` — expect 1759/1759, offline.
 - `src/validate_dashboards.py` reproduces every publisher comparison. Issuance,
   trigger mix, EL and spread validate (spread: corr 0.90, -0.03pp after the
   2026-09-15 price-of-par fix). The offering size-change series is bracketed

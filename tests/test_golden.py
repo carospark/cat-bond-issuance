@@ -24,7 +24,7 @@ from parse_deal import (_is_backward_reference, sentences,  # noqa: E402
                         _pct_to_float, _series_tokens, CUMULATIVE_RE,
                         _cites_only_foreign_series,
                         SPECULATIVE_SIZE_RE, TRANCHE_OF_RE)
-from mentions import classify  # noqa: E402
+from mentions import canon_label, classify  # noqa: E402
 from net_supply import usd_millions  # noqa: E402
 from parse_deal import (parse_deal, parse_tranches, check_tranche_sum,  # noqa: E402
                         MONTHS, TIER1_KEYS, MONEY_RE, NEGATED_RESIZE_RE,
@@ -146,6 +146,12 @@ PAGES = [
     "residential-reinsurance-2022-limited-series-2022-1",  # "Class 10 ... was pulled from the issuance"
     "kilimanjaro-re-ltd-series-2018-1",      # bare "Class A"/"Class B" beside A-1/A-2/B-1/B-2
     "sanders-re-iii-ltd-series-2022-1",      # "class is as yet unsized" grew a "Class IS" row
+    # Unfinished 2026-09-15 patch recovered on takeover: compact class labels
+    # and percentage changes that looked like settled spreads.
+    "integrity-re-iii-ltd-series-2025-1",    # A1/A2/B1/B2 are distinct classes; no bleed into C
+    "bellemeade-re-2020-1-ltd",              # M1-A and M-1A are the same class
+    "ibis-re-ii-ltd-series-2013-1",          # "increase in pricing of 6.7%" is not a spread
+    "everglades-re-ii-ltd-series-2015-1",   # "upsized by 20%" is not a spread
 ]
 
 # Verified by reading the source prose; see notes for provenance.
@@ -434,7 +440,8 @@ SIZE_LAUNCH_REJECT = {
 # 2020-1 Class A notes"; the Class B it mentions belongs to Series 2018-1.
 TRANCHE_COUNT = {"akibare-re-pte-ltd-series-2020-1": 1,
                  "kilimanjaro-re-ltd-series-2018-1": 4,   # A-1, A-2, B-1, B-2; not the parent labels
-                 "sanders-re-iii-ltd-series-2022-1": 3}   # A, B, C; not "Class IS"
+                 "sanders-re-iii-ltd-series-2022-1": 3,   # A, B, C; not "Class IS"
+                 "bellemeade-re-2020-1-ltd": 3}           # M-1A, M-1B, B-1; no spelling duplicates
 
 # Flags that must be present: the "why" beside an honest None.
 FLAGS = {
@@ -491,6 +498,30 @@ TRANCHE_FIELDS = {
     # Withdrawn classes carry no size and the sum check counts them as zero.
     "integrity-re-ltd-series-2022-1": {"Class B": {"tranche_size_final": None}},
     "residential-reinsurance-2022-limited-series-2022-1": {"Class 10": {"tranche_size_final": None}},
+    # Compact labels are canonicalised before windows bind tranche facts.
+    "integrity-re-iii-ltd-series-2025-1": {
+        "Class A-1": {"spread_risk_margin": "8%"},
+        "Class A-2": {"spread_risk_margin": "8%"},
+        "Class B-1": {"spread_risk_margin": "9.75%"},
+        "Class B-2": {"spread_risk_margin": "9.75%"},
+        "Class C": {"spread_risk_margin": "12.25%"},
+        "Class D": {"spread_risk_margin": "25.5%"},
+    },
+    "bellemeade-re-2020-1-ltd": {
+        "Class M-1A": {"tranche_size_final": "$252.124m"},
+        "Class M-1B": {"tranche_size_final": "$171.5m"},
+        "Class B-1": {"tranche_size_final": "$26.43m"},
+    },
+    # The false percentages are rejected. Where no precise settled-price
+    # idiom matches, an honest None is preferred to a plausible wrong value.
+    "ibis-re-ii-ltd-series-2013-1": {
+        "Class A": {"spread_risk_margin": None},
+        "Class B": {"spread_risk_margin": "4.5%"},
+        "Class C": {"spread_risk_margin": None},
+    },
+    "everglades-re-ii-ltd-series-2015-1": {
+        "Class A": {"spread_risk_margin": "5.15%"},
+    },
 }
 
 # Deal-level size history. A state here must be the DEAL's size, never a
@@ -819,6 +850,26 @@ def unit_predicates():
     bwd = _bindings_by_label("The $134,574,000 tranche of Class M-1 notes; $16,821,000 tranche of Class B-1 notes.")
     check(bwd == {"CLASS M-1": ["$134,574,000"], "CLASS B-1": ["$16,821,000"]},
           "UNIT backward label binding", str(bwd))
+    for raw, want in [("A1", "A-1"), ("A-1", "A-1"),
+                      ("M1-A", "M-1A"), ("M-1A", "M-1A"),
+                      ("A", "A"), ("10", "10")]:
+        check(canon_label(raw) == want, f"UNIT canonical class label {raw}",
+              f"want={want!r} got={canon_label(raw)!r}")
+    got = [label for label, _ in _tranche_windows(
+        "A $50 million Class A1 tranche of notes. "
+        "A $75 million Class A2 tranche of notes. "
+        "The Class C tranche was $25 million.")]
+    check(got == ["Class A-1", "Class A-2", "Class C"],
+          "UNIT compact class labels split windows", repr(got))
+    for text, want in [
+        ("At final pricing the cat bond upsized by 20% to reach $300m in size.", None),
+        ("an increase in pricing of 6.7% from the mid-point of the original range.", None),
+        ("The notes were priced at 5.15%.", "5.15%"),
+        ("The Class A notes are $50 million and their pricing was fixed at 8%.", "8%"),
+    ]:
+        got = _apply_patterns("spread_risk_margin", TIER2_PATTERNS["spread_risk_margin"], text)["value"]
+        check(got == want, f"UNIT settled spread {text[:38]!r}",
+              f"want={want!r} got={got!r}")
     for text, want in [
         ("is now aiming for between $25m and $100m in size, we\u2019re told.", ("$25m", "range")),
         ("priced offering $95 million of notes at a bond coupon", ("$95 million", "priced")),
@@ -1279,6 +1330,13 @@ def main():
         check(not any(f["check"] == "spread>EL" for f in findings),
               f"GUARD spread>EL-is-not-a-violation {slug}",
               "collateral yield makes this a plausibility check, not an invariant")
+        if slug == "everglades-re-ii-ltd-series-2015-1":
+            probe = [dict(r) for r in rws2]
+            probe[0]["spread_risk_margin"] = "20%"
+            probe_findings = validate(rec, probe, None)
+            check(any(f["check"] == "spread_outside_guidance" for f in probe_findings),
+                  "UNIT validator catches spread far outside guidance",
+                  repr(probe_findings))
 
         # GUARD: terminal status suppresses any issued-principal figure.
         if rec.get("deal_status", {}).get("value") in ("not_issued", "cancelled"):
@@ -1293,7 +1351,7 @@ def main():
     # Pin the total. Guards are conditional on extracted data, so a regression
     # that empties a field silently removes its checks and the suite still
     # reports "all passed" on a smaller suite.
-    EXPECTED_CHECKS = 1682
+    EXPECTED_CHECKS = 1759
     if len(results) != EXPECTED_CHECKS:
         results.append((False, "GUARD check-count",
                         f"expected {EXPECTED_CHECKS} checks, ran {len(results)}"

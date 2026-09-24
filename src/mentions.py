@@ -96,10 +96,23 @@ SYMBOL = {"USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥"}
 # pick the bound it means rather than whichever the regex reached first.
 RANGE_RE = re.compile(r"between\s|from\s|\bto\b|\band\b")
 
-CLASS_RE = re.compile(r"\bClass\s+([A-Z]{1,3}-\d+[A-Z]?|[A-Z]{1,3}\b|\d{1,2}\b)",
+# "Class A1" / "Class A2" without a hyphen (Integrity Re III 2025-1): unseen,
+# their pricing bled into Class C's window.
+CLASS_RE = re.compile(r"\bClass\s+([A-Z]{1,3}-\d+[A-Z]?|[A-Z]{1,2}\d{1,2}(?:-[A-Z])?\b|[A-Z]{1,3}\b|\d{1,2}\b)",
                       re.IGNORECASE)
 
 WINDOW = 60          # chars either side searched for a governing cue
+
+
+def canon_label(ident):
+    """One spelling per class: "A1", "A-1" -> "A-1"; "M1-B", "M-1B" -> "M-1B".
+
+    Bellemeade 2020-1 writes "Classes M1-A, M1-B" and later "Class M-1A";
+    two spellings made two tranches. Letters-only ("A", "IV") and digits-only
+    ("10") labels are unchanged.
+    """
+    m = re.fullmatch(r"([A-Z]{1,2})-?(\d{1,2})-?([A-Z])?", ident.upper())
+    return "%s-%s%s" % (m.group(1), m.group(2), m.group(3) or "") if m else ident.upper()
 
 # "The attachment point ... is at $800 million" (PoleStar 2024-3) and "the
 # layer of SafePoint's tower where this cat bond will feature is $200 million
@@ -206,13 +219,13 @@ def scope_of(text, pos):
     m = re.match(r"[^.;,]{0,40}?\b(?:of|from|for)\s+(?:the\s+)?(?:\w+\s+){0,3}?"
                  r"Class\s+([A-Z]{1,3}-\d+[A-Z]?|[A-Z]{1,3}\b|\d{1,2}\b)", after, re.IGNORECASE)
     if m:
-        return "Class " + m.group(1).upper()
+        return "Class " + canon_label(m.group(1))
     before = text[max(0, pos - 300):pos]
     cut = max(before.rfind(". "), before.rfind("; "))
     if cut >= 0:
         before = before[cut + 2:]
     hits = list(CLASS_RE.finditer(before))
-    return ("Class " + hits[-1].group(1).upper()) if hits else None
+    return ("Class " + canon_label(hits[-1].group(1))) if hits else None
 
 
 def extract(text, state="launch"):

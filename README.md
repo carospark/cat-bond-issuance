@@ -79,7 +79,7 @@ An honest `None` is always preferred to a plausible wrong value.
 
 ## Establishing correctness
 
-- **532 assertions**, all offline against cached fixtures, including exact
+- **1,759 assertions**, all offline against cached fixtures, including exact
   expected values, a table of *known-wrong* values that must never reappear,
   and unit tests for individual predicates.
 - **Mutation testing.** Every guard is verified by reintroducing the bug it

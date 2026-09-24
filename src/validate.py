@@ -169,6 +169,16 @@ def validate(rec, tranches, index_row=None):
         cs = t.get("conditional_severity")
         if cs is not None and cs > 1:
             add("VIOLATION", "severity<=1", "%s severity=%s" % (tid, cs))
+        # A settled spread lands near its guidance. "an increase in pricing
+        # of 6.7%" (Ibis Re II 2013-1, guidance 3.5-4%) and "upsized by 20%"
+        # (Everglades II 2015-1, guidance 4-4.5%) sat in the spread column
+        # until this check found them. Guidance quoted as a price of par
+        # (zero-coupon notes, "92.25% to 93%") is skipped.
+        g = re.search(r"([\d.,]+)\s*%\s*(?:to|and|[-\u2013])\s*([\d.,]+)\s*%", t.get("price_guidance") or "")
+        if g and sp:
+            lo, hi = (float(x.replace(",", ".")) for x in g.groups())
+            if hi < 50 and (sp < 0.7 * lo or sp > 1.3 * hi):
+                add("WARN", "spread_outside_guidance", "%s spread=%s guidance=%s-%s" % (tid, sp, lo, hi))
 
     # --- 5. risk ordering across tranches (soft: structures differ) --------
     ranked = [(t.get("tranche_id"), _pct(t.get("attachment_probability")),

@@ -29,7 +29,7 @@ from bs4 import BeautifulSoup
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fetch import fetch
-from mentions import classify, extract, solve_tranche_sizes
+from mentions import classify, extract, solve_tranche_sizes, canon_label
 
 LABEL_MAP = {
     "issuer": "issuer",
@@ -119,7 +119,9 @@ TIER2_PATTERNS = {
         # "settled to offer investors a yield of 2.25%" (Lion I)
         (r"(?:settled|priced|closed) to (?:offer|pay) (?:investors )?an? (?:initial )?"
          r"(?:yield|coupon|spread|risk margin) of (\d+(?:[.,]\d+)?\s*%)" + NOT_RANGE + r"", "strong"),
-        (r"final(?:ised|ized)? (?:pricing|spread|risk margin)[^.%]{0,30}?(\d+(?:[.,]\d+)?\s*%)", "strong"),
+        # NOT "At final pricing the cat bond upsized by 20%" (Everglades II
+        # 2015-1): "by X%" is a change.
+        (r"final(?:ised|ized)? (?:pricing|spread|risk margin)[^.%]{0,30}?(?<!by )(?<!up )(?<!down )\b(\d+(?:[.,]\d+)?\s*%)", "strong"),
         # Settlement language first. "guide pricing of 11.25% to 12.25%" used to
         # match the generic form and return the range's LOWER BOUND as if it
         # were the settled spread; the lookahead now rejects range endpoints.
@@ -127,8 +129,11 @@ TIER2_PATTERNS = {
         (r"(?:pricing|spread)[^.%]{0,60}?fixed at (\d+(?:[.,]\d+)?\s*%)", "strong"),
         # "priced at 91.5% of the original principal amount" is a DISCOUNT
         # PRICE, not a spread. Reject when the percent is of principal/par/face.
-        (r"(?:priced|pricing) (?:at|of) (\d+(?:[.,]\d+)?\s*%)"
+        # NOT "an increase in pricing of 6.7% from the mid-point" (Ibis Re II
+        # 2013-1): a change in pricing is a percentage, not a spread.
+        (r"(?<!in )(?<!of )(?:priced|pricing) (?:at|of) (\d+(?:[.,]\d+)?\s*%)"
          r"(?!\s*(?:to|and|[-\u2013])\s*\d+(?:[.,]\d+)?\s*%)"
+         r"(?!\s*(?:from|on|above|below|higher|lower|increase|decrease|reduction|drop))"
          r"(?!\s*of\s+(?:the\s+)?(?:original\s+)?(?:principal|par|face))", "strong"),
         # Every settled-price anchor rejects a range endpoint. "coupon of
         # 2.25% to 2.5%" returned 2.25% -- right on Lion I by luck only.
@@ -1346,7 +1351,9 @@ TRANCHE_SIZE_RES = [(re.compile(x, re.IGNORECASE), k) for x, k in (
 # Case-insensitive: Artemis writes "class A variable-rate notes" lowercase on
 # older pages (Atlantic & Western 2005), which a capitalised-only pattern
 # silently dropped, collapsing a two-tranche deal into one.
-CLASS_RE = re.compile(r"\bClass\s+([A-Z]{1,3}-\d+[A-Z]?|[A-Z]{1,3}\b|\d{1,2}\b)",
+# "Class A1" / "Class A2" without a hyphen (Integrity Re III 2025-1): unseen,
+# their pricing bled into Class C's window.
+CLASS_RE = re.compile(r"\bClass\s+([A-Z]{1,3}-\d+[A-Z]?|[A-Z]{1,2}\d{1,2}(?:-[A-Z])?\b|[A-Z]{1,3}\b|\d{1,2}\b)",
                       re.IGNORECASE)
 
 # ...but "Class 3 Bermuda-based insurer" is a regulatory class, not a tranche.
@@ -1463,7 +1470,7 @@ def _tranche_windows(prose, issue_year=None, own_series=frozenset()):
             continue
         if REGULATORY_CLASS_RE.match(prose, m.end()):
             continue
-        by_label.setdefault("Class " + ident, []).append(m)
+        by_label.setdefault("Class " + canon_label(ident), []).append(m)
     real = set()
     for label, ms in by_label.items():
         for m in ms:
@@ -1483,7 +1490,7 @@ def _tranche_windows(prose, issue_year=None, own_series=frozenset()):
     parents = {lab for lab in real
                if any(re.match(re.escape(lab) + r"-\d", other) for other in real)}
     real -= parents
-    hits = [m for m in hits if "Class " + m.group(1).upper() in real]
+    hits = [m for m in hits if "Class " + canon_label(m.group(1)) in real]
     if not hits:
         return []
 
@@ -1499,7 +1506,7 @@ def _tranche_windows(prose, issue_year=None, own_series=frozenset()):
 
     windows, order = {}, []
     for i, m in enumerate(hits):
-        label = "Class " + m.group(1).upper()
+        label = "Class " + canon_label(m.group(1))
         end = starts[i + 1] if i + 1 < len(hits) else len(prose)
         if label not in windows:
             windows[label] = []
@@ -1628,19 +1635,19 @@ def _bindings_by_label(prose):
     # class along. An amount bound forward is not available backward.
     taken = set()
     for m in FORWARD_BOUND_RE.finditer(prose or ""):
-        out.setdefault(("Class " + m.group(1)).upper(), []).append(_clean(m.group(2)))
+        out.setdefault(("Class " + canon_label(m.group(1))).upper(), []).append(_clean(m.group(2)))
         taken.add(m.start(2))
     for m in LABEL_BOUND_RE.finditer(prose or ""):
         if m.start(1) in taken:
             continue
-        out.setdefault(("Class " + m.group(2)).upper(), []).append(_clean(m.group(1)))
+        out.setdefault(("Class " + canon_label(m.group(2))).upper(), []).append(_clean(m.group(1)))
     # Shared-subject constructions: "Both the Class A and Class B tranche of
     # notes are sized at EUR 25m each" states ONE amount that belongs to BOTH.
     for sentence in sentences(prose or ""):
         if not re.search(r"\beach\b|\b(?:both|all) (?:of the )?(?:\w+ )?tranches\b", sentence, re.IGNORECASE) \
                 and not COUNTED_TRANCHES_RE.search(sentence):
             continue
-        labels = {("Class " + g).upper() for g in CLASS_RE.findall(sentence)
+        labels = {("Class " + canon_label(g)).upper() for g in CLASS_RE.findall(sentence)
                   if g.upper() not in CLASS_STOPWORDS}
         amounts = [x for x in MONEY_RE.findall(sentence)
                    if (_money_to_number(x) or 0) >= 1e6]
@@ -1687,7 +1694,7 @@ def _bound_size_for(label, prose):
         return []
     out = []
     for m in LABEL_BOUND_RE.finditer(prose):
-        if ("Class " + m.group(2)).upper() == label.upper():
+        if ("Class " + canon_label(m.group(2))).upper() == label.upper():
             out.append(_clean(m.group(1)))
     return out
 
@@ -2045,9 +2052,9 @@ def apply_tranche_lifecycle(rows, prose, issue_year=None, own_series=frozenset()
             if single and _is_backward_reference(sent, issue_year, own_series):
                 continue  # a predecessor's fate, not this tranche's
             for clause in re.split(r"\bbut\b|\bwhile\b|;", sent):
-                targets = [known[("Class " + g).upper()]
+                targets = [known[("Class " + canon_label(g)).upper()]
                            for g in CLASS_RE.findall(clause)
-                           if ("Class " + g).upper() in known]
+                           if ("Class " + canon_label(g)).upper() in known]
                 if not targets and single and not CLASS_RE.search(clause):
                     targets = single
                 if not targets:

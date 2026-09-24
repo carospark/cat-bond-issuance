@@ -172,6 +172,13 @@ veto: `_spread_is_price` drops any spread candidate >= 50% (flag
 reads the stated equivalent. Result (`el_spread.csv`): corr 0.90, mean diff
 -0.03pp, every year 2012-2026 within 1.2pp. Still open, lower value:
 
+Takeover follow-up 2026-09-23: two more false settled spreads are closed.
+"At final pricing ... upsized by 20%" and "an increase in pricing of 6.7%"
+are percentage changes, not spreads. A spread-vs-guidance backstop now exposes
+two duplicated Kilimanjaro III 2019 rows where Class B-2 inherited Class A's
+15%-16% guidance beside its correct 9.5% spread; B-2's page-stated guidance is
+8.75%-9.75%. This is grouped cross-series binding, not a spread-value defect.
+
 - Recall: spread is emitted for ~1/4 of tranches before 2025 (`n_spread`).
 - Guidance endpoints still leak as settled spreads ("guidance reduced to 16%
   to 16.25%" -> 16%): NOT_RANGE only guards the anchors that carry it.
