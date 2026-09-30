@@ -93,11 +93,22 @@ CLASS's term on a multi-class page. Result: 354 stated maturities,
 `maturity_scheduled` (stated, else issue + term) 489 -> 607 of 1,311, zero
 `maturity_not_after_issue` violations. Mutation-tested. Still open:
 
-- Per-class "Notes due <date>" lists (Montana Re 2010-1, Isosceles 2023):
-  every class carries the same date and the class veto drops them all. Code
-  done 2026-09-30 (>= 2 classes, one Month YYYY, flag
-  `maturity_from_class_agreement`); synthetic unit tests only. Effect on real
-  pages NOT yet measured -- rebuild locally and read the newly filled deals.
+- Per-class "Notes due <date>" lists: done 2026-09-30 (>= 2 classes, one
+  Month YYYY, flag `maturity_from_class_agreement`). Measured over `raw/`:
+  exactly ONE deal adopts, Montana Re 2010-1 (January 2014, Classes C/D/E,
+  read against the page). 354 -> 355 stated maturities; no other cell in
+  `deals.csv`, `tranches.csv` or `validation.csv` moves. No false adoption.
+  Of the other 28 no-maturity deals with a class-scoped date: 8 have classes
+  that disagree (correctly unadopted), 8 state one class of several, and 12
+  are SINGLE-TRANCHE deals whose only class states the date ("The single
+  tranche of Class A notes ... to the end of May 2027", Herbie Re 2025-1) --
+  the next rule, and 12x this one: one class vote on a one-tranche deal is
+  the deal's maturity.
+- Isosceles 2023 was never this case. The page covers three series: Series
+  2023-A Classes A-D due May 10, 2024; Series 2023-C and 2023-G Class E due
+  June 7, 2024. It reads "June 2024" because the Series 2023-C sentence names
+  no Class and so passes as deal-level. Latest maturity, by accident: a
+  SERIES-scoped date on a multi-series page should be vetoed like a class's.
 - `stated_derived_mismatch` is now a real signal (month ordinals, not
   strings): where it fires the stated date wins and the term was approximate
   ("three-year" issued March, matures June). 94 deals; read a few.
