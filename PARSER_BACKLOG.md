@@ -94,8 +94,10 @@ CLASS's term on a multi-class page. Result: 354 stated maturities,
 `maturity_not_after_issue` violations. Mutation-tested. Still open:
 
 - Per-class "Notes due <date>" lists (Montana Re 2010-1, Isosceles 2023):
-  every class carries the same date and the class veto drops them all. Adopt
-  the date when all classes agree.
+  every class carries the same date and the class veto drops them all. Code
+  done 2026-09-30 (>= 2 classes, one Month YYYY, flag
+  `maturity_from_class_agreement`); synthetic unit tests only. Effect on real
+  pages NOT yet measured -- rebuild locally and read the newly filled deals.
 - `stated_derived_mismatch` is now a real signal (month ordinals, not
   strings): where it fires the stated date wins and the term was approximate
   ("three-year" issued March, matures June). 94 deals; read a few.

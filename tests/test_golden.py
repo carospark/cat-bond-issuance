@@ -7,16 +7,40 @@ Two kinds of assertion:
            broke another.
 
 Run:  ./.venv/bin/python tests/test_golden.py
+
+Two tiers:
+  UNIT     pure predicates, regexes and parsers on synthetic text. Run anywhere.
+  GOLDEN   anything that parses a cached page in raw/ (or needs data/queue.csv,
+           itself derived from raw/). Skipped, with a printed count, when raw/
+           is not present; run in full, unchanged, when it is.
+
+The suite is offline by construction: ARTEMIS_OFFLINE is forced on and
+requests.get is replaced with a function that raises, so a cache miss can never
+reach the network.
 """
 
+import os
 import re
 import sys
 from pathlib import Path
 
+# Must precede any import that might fetch. fetch() reads this at call time.
+os.environ["ARTEMIS_OFFLINE"] = "1"
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from fetch import fetch          # noqa: E402
+import requests                  # noqa: E402
+
+
+def _no_network(*args, **kwargs):
+    raise RuntimeError("network access attempted during tests")
+
+
+requests.get = requests.post = requests.request = _no_network
+requests.Session.request = _no_network
+
+from fetch import fetch, _cache_path  # noqa: E402
 from validate import validate  # noqa: E402
 from sibling_registry import SiblingRegistry  # noqa: E402
 from fetch import DEAL_DIRECTORY_URL as BASE  # noqa: E402
@@ -1081,6 +1105,86 @@ def unit_registry_rules():
           str(found))
 
 
+def unit_maturity_class_scoped():
+    """Per-class maturities (backlog 3): agree -> deal-level, disagree -> None.
+
+    Synthetic sentences only. The class-scoped veto drops every sentence that
+    names a Class, which is right when classes differ (one class of three
+    running to a different date) and wrong when every class carries the SAME
+    date ("Notes due <date>" per class). The rule: adopt the date when at
+    least two distinct classes state maturities and all resolve to one
+    Month YYYY. One class alone proves nothing about the others.
+    """
+    def mat(text, issue_year=None):
+        f = _apply_patterns("maturity_date", TIER2_PATTERNS["maturity_date"],
+                            text, issue_year)
+        return f["value"], f["flags"]
+
+    agree = ("Class A notes due March 15, 2028. Class B notes due March 15, 2028. "
+             "Class C notes due March 15, 2028.")
+    v, fl = mat(agree)
+    check(v == "March 2028", "UNIT class-maturity all classes agree", repr((v, fl)))
+    check(any(str(x).startswith("maturity_from_class_agreement") for x in fl),
+          "UNIT class-maturity agreement is flagged", repr(fl))
+
+    # Different days, same Month YYYY: still agreement (day is stripped).
+    v, _ = mat("Class A notes due March 3, 2028. Class B notes due March 20, 2028.")
+    check(v == "March 2028", "UNIT class-maturity agree across different days", repr(v))
+
+    # Other maturity phrasings go through the same rule (class of problem).
+    v, _ = mat("The Class A notes mature in June 2027. The Class B notes mature in "
+               "June 2027.")
+    check(v == "June 2027", "UNIT class-maturity agree, 'mature in' phrasing", repr(v))
+
+    # Lowercase labels, as some pages write them.
+    v, _ = mat("class A notes due May 2029. class B notes due May 2029.")
+    check(v == "May 2029", "UNIT class-maturity agree, lowercase labels", repr(v))
+
+    # Disagreement: current behaviour, no deal-level value.
+    v, fl = mat("Class A notes due March 15, 2028. Class B notes due March 15, 2030.")
+    check(v is None, "UNIT class-maturity disagree -> no deal-level value",
+          repr((v, fl)))
+    check(not any(str(x).startswith("maturity_from_class_agreement") for x in fl),
+          "UNIT class-maturity disagree carries no agreement flag", repr(fl))
+
+    # Disagreement inside ONE sentence.
+    v, _ = mat("Class A notes are due March 2028 and Class B notes are due March 2030.")
+    check(v is None, "UNIT class-maturity disagree within one sentence", repr(v))
+
+    # A single class-scoped maturity is one class's term, not the deal's.
+    v, _ = mat("The riskier Class 11 tranche has protection to the end of May 2025, "
+               "while the other two run longer.")
+    check(v is None, "UNIT class-maturity single class -> no deal-level value", repr(v))
+    v, _ = mat("The Class A notes due March 2028.")
+    check(v is None, "UNIT class-maturity single class, 'notes due'", repr(v))
+    # Same class stated twice is still one class.
+    v, _ = mat("Class A notes due March 2028. The Class A notes mature in March 2028.")
+    check(v is None, "UNIT class-maturity one class stated twice", repr(v))
+
+    # A class with no date beside a dated class: not evidence of agreement.
+    v, _ = mat("Class A notes due March 2028, while the Class B notes are floating rate.")
+    check(v is None, "UNIT class-maturity dated class beside undated class", repr(v))
+
+    # A deal-level statement wins over any per-class one.
+    v, _ = mat("The notes are due in April 2029. Class A notes due March 2028. "
+               "Class B notes due March 2028.")
+    check(v == "April 2029", "UNIT class-maturity deal-level still wins", repr(v))
+
+    # Extensions and predecessors stay excluded, and do not join the vote.
+    v, _ = mat("Class A notes due March 2028. Class B notes due March 2028. "
+               "Class C maturity extended to June 2029.")
+    check(v == "March 2028", "UNIT class-maturity extension does not break agreement",
+          repr(v))
+    v, _ = mat("Class A notes due March 2028. Class B notes due March 2028, "
+               "which replaces the prior notes.")
+    check(v is None, "UNIT class-maturity replacement sentence is not a vote", repr(v))
+
+    # Backward references (dates before the issue year) are not this deal's.
+    v, _ = mat("Class A notes due March 2019. Class B notes due March 2019.",
+               issue_year=2024)
+    check(v is None, "UNIT class-maturity backward reference excluded", repr(v))
+
+
 def unit_percent_parsing():
     """Pin decimal-comma percentages.
 
@@ -1099,15 +1203,39 @@ def unit_percent_parsing():
         check(got == want, f"UNIT pct {raw!r}", f"want={want} got={got}")
 
 
+def golden_available():
+    """True when every golden page is cached. False when raw/ is absent.
+
+    A PARTIAL cache is an error, not a skip: silently running a subset would
+    change the check count and could hide a regression behind a green run.
+    """
+    missing = [s for s in PAGES if not _cache_path(BASE + s + "/").exists()]
+    if len(missing) == len(PAGES):
+        return False
+    if missing:
+        raise SystemExit(
+            f"raw/ is present but {len(missing)}/{len(PAGES)} golden pages are "
+            f"missing from the cache (first: {missing[0]}). Refusing to run a "
+            "partial golden suite.")
+    if not (ROOT / "data" / "queue.csv").exists():
+        raise SystemExit("raw/ is present but data/queue.csv is not; the "
+                         "sibling-registry checks need it.")
+    return True
+
+
 def main():
+    golden = golden_available()
     unit_percent_parsing()
     unit_predicates()
     unit_component_scope()
-    unit_registry_rules()
-    unit_sibling_registry()
     unit_sentences()
     unit_backward_reference()
-    for slug in PAGES:
+    unit_maturity_class_scoped()
+    n_unit = len(results)
+    if golden:
+        unit_registry_rules()       # parses pages; reads data/queue.csv
+        unit_sibling_registry()     # parses pages; reads data/queue.csv
+    for slug in (PAGES if golden else []):
         rec = parse_deal(fetch(BASE + slug + "/"), deal_url=BASE + slug + "/")
 
         for key, want in EXPECT.get(slug, {}).items():
@@ -1351,11 +1479,25 @@ def main():
     # Pin the total. Guards are conditional on extracted data, so a regression
     # that empties a field silently removes its checks and the suite still
     # reports "all passed" on a smaller suite.
-    EXPECTED_CHECKS = 1759
-    if len(results) != EXPECTED_CHECKS:
+    # 1759 = 192 unit + 1567 golden when the golden pin was measured over raw/
+    # (2026-09-23). Since then 16 UNIT checks were added (class maturity).
+    # The tiers are pinned separately so unit checks can be added without
+    # touching the golden pin, which has only ever been measured over raw/.
+    EXPECTED_UNIT_CHECKS = 208
+    EXPECTED_GOLDEN_CHECKS = 1567
+    n_golden = len(results) - n_unit
+    if n_unit != EXPECTED_UNIT_CHECKS:
+        results.append((False, "GUARD unit-check-count",
+                        f"expected {EXPECTED_UNIT_CHECKS} unit checks, ran "
+                        f"{n_unit} - update EXPECTED_UNIT_CHECKS deliberately"))
+    if not golden:
+        print(f"{n_unit} UNIT checks ran; {EXPECTED_GOLDEN_CHECKS} golden "
+              "checks skipped: raw/ not present")
+    elif n_golden != EXPECTED_GOLDEN_CHECKS:
         results.append((False, "GUARD check-count",
-                        f"expected {EXPECTED_CHECKS} checks, ran {len(results)}"
-                        " - update EXPECTED_CHECKS deliberately"))
+                        f"expected {EXPECTED_GOLDEN_CHECKS} golden checks, ran "
+                        f"{n_golden}"
+                        " - update EXPECTED_GOLDEN_CHECKS deliberately"))
 
         # GUARD: a decimal comma must not inflate a percentage 100x.
         for r in parse_tranches(rec):
