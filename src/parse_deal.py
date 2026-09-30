@@ -218,6 +218,7 @@ SIZING_CTX_RE = re.compile(
 # launch reads "comes out of the blocks at $300m in size, split into two
 # tranches", which is deal-scoped despite naming them.
 CLASS_SCOPED_RE = re.compile(r"\bClass\s+[A-Z0-9]", re.IGNORECASE)
+CLASS_LABEL_RE = re.compile(r"\bClass\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
 # "An also $75 million tranche of Cklass B notes" (Herbie 2020-2, sic): the
 # label detector cannot read a typo, but "tranche of <word> <letter> notes"
 # is a labelled component whatever the word. NOT plain "tranche of notes":
@@ -763,10 +764,43 @@ def _spread_is_price(value):
         return False
 
 
+def _sentence_start(text, pos):
+    """Character offset where the sentence containing `pos` begins."""
+    for a, b in _sentence_spans(text):
+        if a <= pos < b:
+            return a
+    return 0
+
+
+def _class_label_before(sentence, offset):
+    """The class a match at `offset` in `sentence` belongs to: the nearest
+    "Class X" before it, else the first in the sentence. Upper-cased."""
+    labels = [(m.start(), m.group(1).upper()) for m in CLASS_LABEL_RE.finditer(sentence)]
+    before = [lb for pos, lb in labels if pos < offset]
+    return (before[-1] if before else labels[0][1]) if labels else None
+
+
+def _class_agreement(votes):
+    """(value, classes) when >= 2 distinct classes state maturities and all
+    resolve to one Month YYYY, else None.
+
+    One class alone is one class's term, not the deal's ("The riskier Class 11
+    tranche ... to the end of May 2025, while the other two ..."): agreement
+    needs at least two classes. A class that states no date casts no vote, so
+    the rule cannot prove that EVERY class carries the date -- it adopts the
+    date when no class contradicts it (flagged, so it is filterable).
+    """
+    values = {v for _, v in votes}
+    labels = {lb for lb, _ in votes if lb}
+    if len(values) == 1 and len(labels) >= 2:
+        return values.pop(), labels
+    return None
+
+
 def _apply_patterns(name, patterns, text, issue_year=None, own_series=frozenset()):
     """Run every pattern, collect distinct candidates, and grade the result."""
     hits, strength_used = [], None
-    dropped, par_prices = [], []
+    dropped, par_prices, class_votes = [], [], []
     for pattern, strength in patterns:
         for m in re.finditer(pattern, text, re.IGNORECASE):
             value = _clean(m.group(1))
@@ -784,8 +818,17 @@ def _apply_patterns(name, patterns, text, issue_year=None, own_series=frozenset(
                 continue
             if name == "maturity_date":
                 sent = _sentence_at(text, m.start())
-                if MATURITY_EXCLUDE_RE.search(sent) or CLASS_SCOPED_RE.search(sent):
+                if MATURITY_EXCLUDE_RE.search(sent):
                     dropped.append(value + " (extension/predecessor/class)")
+                    continue
+                if CLASS_SCOPED_RE.search(sent):
+                    dropped.append(value + " (extension/predecessor/class)")
+                    # One class's term is not the deal's, but it is a vote: if
+                    # every class-scoped maturity agrees (below), so does the
+                    # deal. A backward reference is no vote.
+                    if not _is_backward_reference(sent, issue_year, own_series):
+                        label = _class_label_before(sent, m.start() - _sentence_start(text, m.start()))
+                        class_votes.append((label, _strip_day(value)))
                     continue
                 value = _strip_day(value)
             if _is_backward_reference(_sentence_at(text, m.start()), issue_year, own_series):
@@ -801,6 +844,16 @@ def _apply_patterns(name, patterns, text, issue_year=None, own_series=frozenset(
             strength_used = strength
             break  # a strong tier matched; don't fall through to weak patterns
 
+    if not hits and name == "maturity_date":
+        agreed = _class_agreement(class_votes)
+        if agreed:
+            value, labels = agreed
+            return _field(value, "medium", "regex:maturity_date:class_agreement",
+                          "; ".join("Class %s: %s" % (lb, v)
+                                    for lb, v in sorted(set(class_votes))),
+                          ["maturity_from_class_agreement=%s" % sorted(labels)]
+                          + (["foreign_deal_reference_excluded=%s" % dropped]
+                             if dropped else []))
     if not hits:
         f = _field(flags=["not_found"])
         if dropped:

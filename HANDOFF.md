@@ -3,6 +3,35 @@
 Read `PARSER_BACKLOG.md` first. It is the current state: what is parsed, what
 is validated, and everything still worth fixing, ordered by value per hour.
 
+## Checkpoint (2026-09-30): offline unit tier + per-class maturity
+
+Done in an environment with no `raw/` and no `data/`; the golden suite over
+`raw/` was NOT run here. Run it locally before merging.
+
+- `tests/test_golden.py` is now two tiers. UNIT checks (192 existing + 16 new)
+  run anywhere. Everything that parses a page, or reads `data/queue.csv`
+  (including the two sibling-registry unit functions), is GOLDEN and is skipped
+  with a printed count when `raw/` is absent. A partial `raw/` is an error, not
+  a skip. `ARTEMIS_OFFLINE=1` is forced and `requests.get/post/request` raise,
+  so a cache miss cannot reach the network.
+- Pins: the single 1759 pin is split into 208 unit + 1567 golden (192 + 1567 =
+  1759, the old total; the 1567 is derived from the old pin and unverified
+  here). Expected local total is now 1775 (1759 + 16). If it is not, stop.
+- Backlog 3, per-class "Notes due": when at least two distinct classes state
+  maturities and all resolve to one Month YYYY, that date is the deal-level
+  maturity (`maturity_from_class_agreement` flag, medium confidence). One class
+  alone, disagreement, extensions, replacements and backward references keep
+  current behaviour. Mutation-tested (four mutations, each failed a test).
+  Effect on real pages is unmeasured: expect `maturity_date` recall to rise on
+  Montana Re 2010-1 / Isosceles 2023-type pages, and check no golden MATURITY
+  or backref guard moves.
+- Noticed, not changed: the guards after the `check-count` block in `main()`
+  (pct-in-range, spread-not-price, EL<=AP per tranche, seaside, citrus) sit
+  inside the failure branch and so never run when the count is right. Moving
+  them out would change the count; decide deliberately.
+- Noticed, not changed: `data/validation_dashboards/*.csv` are tracked in git,
+  contrary to `DATA_POLICY.md` (`git ls-files | grep -c csv` prints 5).
+
 ## Takeover checkpoint (2026-09-23)
 
 - Recovered the uncommitted patch left after `10ff45f`. Compact labels now
