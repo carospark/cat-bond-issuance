@@ -6,7 +6,16 @@ is validated, and everything still worth fixing, ordered by value per hour.
 ## Checkpoint (2026-09-30): offline unit tier + per-class maturity
 
 Done in an environment with no `raw/` and no `data/`; the golden suite over
-`raw/` was NOT run here. Run it locally before merging.
+`raw/` was NOT run there.
+
+Verified locally over `raw/` the same day: **1775/1775** (208 unit + 1567
+golden, both pins hold; main was 1759/1759 immediately before). Bundle rebuilt
+on main and on the branch and diffed: one deal changes, Montana Re 2010-1
+(maturity January 2014, correct against the page); 354 -> 355 stated
+maturities; `tranches.csv` and `validation.csv` byte-identical. See
+`PARSER_BACKLOG.md` item 3 for what the rule did not reach. The dead guards
+below were dry-run live over all 98 golden pages: 340 checks, 0 failures, so
+moving them into the per-page loop is safe and re-pins golden to 1907.
 
 - `tests/test_golden.py` is now two tiers. UNIT checks (192 existing + 16 new)
   run anywhere. Everything that parses a page, or reads `data/queue.csv`
