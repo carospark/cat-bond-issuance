@@ -13,9 +13,7 @@ golden, both pins hold; main was 1759/1759 immediately before). Bundle rebuilt
 on main and on the branch and diffed: one deal changes, Montana Re 2010-1
 (maturity January 2014, correct against the page); 354 -> 355 stated
 maturities; `tranches.csv` and `validation.csv` byte-identical. See
-`PARSER_BACKLOG.md` item 3 for what the rule did not reach. The dead guards
-below were dry-run live over all 98 golden pages: 340 checks, 0 failures, so
-moving them into the per-page loop is safe and re-pins golden to 1907.
+`PARSER_BACKLOG.md` item 3 for what the rule did not reach.
 
 - `tests/test_golden.py` is now two tiers. UNIT checks (192 existing + 16 new)
   run anywhere. Everything that parses a page, or reads `data/queue.csv`
@@ -34,10 +32,13 @@ moving them into the per-page loop is safe and re-pins golden to 1907.
   Effect on real pages is unmeasured: expect `maturity_date` recall to rise on
   Montana Re 2010-1 / Isosceles 2023-type pages, and check no golden MATURITY
   or backref guard moves.
-- Noticed, not changed: the guards after the `check-count` block in `main()`
-  (pct-in-range, spread-not-price, EL<=AP per tranche, seaside, citrus) sit
-  inside the failure branch and so never run when the count is right. Moving
-  them out would change the count; decide deliberately.
+- Fixed 2026-10-02: the guards after the `check-count` block in `main()`
+  (pct-in-range, spread-not-price, EL<=AP per tranche, seaside, citrus) sat
+  inside the failure branch, after the page loop, so they ran only when the
+  count was already wrong and then only over the last page. They now run per
+  page: +340 golden checks, all passing, pin 1567 -> 1907, total **2115**.
+  Mutation-tested: the old comma-deleting `_pct_to_float` fails pct-in-range
+  (EL=223.0), and disabling `REGULATORY_CLASS_RE` fails the Seaside guard.
 - Noticed, not changed: `data/validation_dashboards/*.csv` are tracked in git,
   contrary to `DATA_POLICY.md` (`git ls-files | grep -c csv` prints 5).
 
@@ -102,7 +103,7 @@ checkpoint above for the current uncommitted work.
 
 - Full crawl done: 1,311 deals parsed; `raw/` and `data/` are gitignored under
   the Artemis licence rule (`DATA_POLICY.md`). Code is tracked, content is not.
-- `./.venv/bin/python tests/test_golden.py` — expect 1759/1759, offline.
+- `./.venv/bin/python tests/test_golden.py` — expect 2115/2115, offline.
 - `src/validate_dashboards.py` reproduces every publisher comparison. Issuance,
   trigger mix, EL and spread validate (spread: corr 0.90, -0.03pp after the
   2026-09-15 price-of-par fix). The offering size-change series is bracketed
