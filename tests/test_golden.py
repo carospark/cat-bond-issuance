@@ -1476,28 +1476,6 @@ def main():
                   f"GUARD no-tier1-size-when-not-issued {slug}",
                   repr(rec["size"]["value"]))
 
-    # Pin the total. Guards are conditional on extracted data, so a regression
-    # that empties a field silently removes its checks and the suite still
-    # reports "all passed" on a smaller suite.
-    # 1759 = 192 unit + 1567 golden when the golden pin was measured over raw/
-    # (2026-09-23). Since then 16 UNIT checks were added (class maturity).
-    # The tiers are pinned separately so unit checks can be added without
-    # touching the golden pin, which has only ever been measured over raw/.
-    EXPECTED_UNIT_CHECKS = 208
-    EXPECTED_GOLDEN_CHECKS = 1567
-    n_golden = len(results) - n_unit
-    if n_unit != EXPECTED_UNIT_CHECKS:
-        results.append((False, "GUARD unit-check-count",
-                        f"expected {EXPECTED_UNIT_CHECKS} unit checks, ran "
-                        f"{n_unit} - update EXPECTED_UNIT_CHECKS deliberately"))
-    if not golden:
-        print(f"{n_unit} UNIT checks ran; {EXPECTED_GOLDEN_CHECKS} golden "
-              "checks skipped: raw/ not present")
-    elif n_golden != EXPECTED_GOLDEN_CHECKS:
-        results.append((False, "GUARD check-count",
-                        f"expected {EXPECTED_GOLDEN_CHECKS} golden checks, ran "
-                        f"{n_golden}"
-                        " - update EXPECTED_GOLDEN_CHECKS deliberately"))
 
         # GUARD: a decimal comma must not inflate a percentage 100x.
         for r in parse_tranches(rec):
@@ -1535,6 +1513,32 @@ def main():
                   "EXPECT citrus C actual maturity", str(lc["Class C"].get("maturity_actual")))
             check(lc["Class A"].get("maturity_actual") == "April 12th 2018",
                   "EXPECT citrus A matured", str(lc["Class A"].get("maturity_actual")))
+    # Pin the total. Guards are conditional on extracted data, so a regression
+    # that empties a field silently removes its checks and the suite still
+    # reports "all passed" on a smaller suite.
+    # 1759 = 192 unit + 1567 golden when the golden pin was measured over raw/
+    # (2026-09-23). Since then 16 UNIT checks were added (class maturity), and
+    # 340 golden checks were revived (2026-10-02): the per-tranche pct/spread/
+    # EL<=AP, Seaside and Citrus guards had sat inside the check-count failure
+    # branch, after the page loop, so they ran only when the count was already
+    # wrong, and then only over the last page.
+    # The tiers are pinned separately so unit checks can be added without
+    # touching the golden pin, which has only ever been measured over raw/.
+    EXPECTED_UNIT_CHECKS = 208
+    EXPECTED_GOLDEN_CHECKS = 1907
+    n_golden = len(results) - n_unit
+    if n_unit != EXPECTED_UNIT_CHECKS:
+        results.append((False, "GUARD unit-check-count",
+                        f"expected {EXPECTED_UNIT_CHECKS} unit checks, ran "
+                        f"{n_unit} - update EXPECTED_UNIT_CHECKS deliberately"))
+    if not golden:
+        print(f"{n_unit} UNIT checks ran; {EXPECTED_GOLDEN_CHECKS} golden "
+              "checks skipped: raw/ not present")
+    elif n_golden != EXPECTED_GOLDEN_CHECKS:
+        results.append((False, "GUARD check-count",
+                        f"expected {EXPECTED_GOLDEN_CHECKS} golden checks, ran "
+                        f"{n_golden}"
+                        " - update EXPECTED_GOLDEN_CHECKS deliberately"))
 
     passed = sum(1 for ok, *_ in results if ok)
     for ok, label, detail in results:
