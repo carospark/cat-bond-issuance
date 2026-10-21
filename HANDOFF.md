@@ -3,6 +3,22 @@
 Read `PARSER_BACKLOG.md` first. It is the current state: what is parsed, what
 is validated, and everything still worth fixing, ordered by value per hour.
 
+## Checkpoint (2026-10-21): separate-series programme totals
+
+- Merna Re II 2022-2 and 2022-3 no longer take their combined $500m placement
+  as each series' launch size. The same rule removes the four-series $1.55bn
+  total from Merna 2025-1 and 2025-2 while retaining their own stated $200m
+  and $300m launches. The general rule requires explicit component evidence:
+  one sentence must enumerate distinct series and equally many same-currency
+  amounts whose sum equals the candidate aggregate. A directory entry
+  representing multiple series itself (Everglades 2023-1/2023-2) keeps its
+  aggregate.
+- All four Merna pages are now in the golden corpus. Expected suite size is
+  210 unit + 1965 golden = **2175** checks.
+- Work is on `fix/merna-programme-total`, based on local `main` after
+  fast-forwarding `fix/live-golden-guards`. The guard-fix commit was already
+  pushed; local `main` is one commit ahead of `origin/main` until next push.
+
 ## Checkpoint (2026-09-30): offline unit tier + per-class maturity
 
 Done in an environment with no `raw/` and no `data/`; the golden suite over
@@ -103,7 +119,7 @@ checkpoint above for the current uncommitted work.
 
 - Full crawl done: 1,311 deals parsed; `raw/` and `data/` are gitignored under
   the Artemis licence rule (`DATA_POLICY.md`). Code is tracked, content is not.
-- `./.venv/bin/python tests/test_golden.py` — expect 2115/2115, offline.
+- `./.venv/bin/python tests/test_golden.py` — expect 2175/2175, offline.
 - `src/validate_dashboards.py` reproduces every publisher comparison. Issuance,
   trigger mix, EL and spread validate (spread: corr 0.90, -0.03pp after the
   2026-09-15 price-of-par fix). The offering size-change series is bracketed

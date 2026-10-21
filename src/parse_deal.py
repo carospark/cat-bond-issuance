@@ -678,6 +678,42 @@ def _series_tokens(text):
     return out
 
 
+def _separate_series_totals(text, own_series):
+    """Aggregate amounts proved to span separately indexed series.
+
+    Some Artemis pages are duplicated once per series even though their prose
+    describes the whole placement.  Merna Re II 2022-2 and 2022-3 each say
+    that the visit sourced $500m, then explicitly enumerate $200m of Series
+    2022-2 and $300m of Series 2022-3.  The $500m is therefore neither
+    series' launch size.
+
+    Only derive a total when this record represents exactly one year-series
+    and one sentence contains equally many money amounts and distinct series,
+    including this series and at least one other.  A directory entry that
+    itself represents several series (Everglades 2023-1/2023-2) keeps its
+    aggregate amount.
+    """
+    own_year_series = {s for s in own_series
+                       if re.fullmatch(r"(?:19|20)\d\d-[0-9A-Z]+", s)}
+    if len(own_year_series) != 1:
+        return set()
+
+    totals = set()
+    for sentence in sentences(text):
+        cited = {s for s in _series_tokens(sentence)
+                 if re.fullmatch(r"(?:19|20)\d\d-[0-9A-Z]+", s)}
+        if not (cited & own_year_series) or not (cited - own_year_series):
+            continue
+        amounts = [m.group(0) for m in MONEY_RE.finditer(sentence)]
+        if len(amounts) != len(cited) or len(amounts) < 2:
+            continue
+        currencies = {_currency(v) for v in amounts}
+        numbers = [_money_to_number(v) for v in amounts]
+        if len(currencies) == 1 and None not in currencies and all(numbers):
+            totals.add(sum(numbers))
+    return totals
+
+
 def _cites_only_foreign_series(sentence, own_series):
     """True if the sentence names another series of the programme and none of
     this deal's own. "(Series 2018-1)" after an issuer name counts; other
@@ -958,6 +994,8 @@ def parse_deal(html, deal_url=None):
 
     # ---- Time series: how terms moved while marketing --------------------
     size_history, skipped_backref, shared_across_series = [], 0, False
+    separate_series_totals = _separate_series_totals(prose, own_series)
+    skipped_series_total = 0
     for label, text in segments:
         for sentence in sentences(text):
             if _is_backward_reference(sentence, issue_year, own_series):
@@ -1032,6 +1070,9 @@ def parse_deal(html, deal_url=None):
                             if _currency(c) == headline_ccy), None)
                 if alt:
                     value, kind = _clean(alt), kind + ":converted"
+            if _money_to_number(value) in separate_series_totals:
+                skipped_series_total += 1
+                continue  # programme total proved by separately indexed series
             size_history.append({"state": label, "value": value, "kind": kind,
                                  "evidence": _clean(sentence)[:200]})
             break
@@ -1064,6 +1105,8 @@ def parse_deal(html, deal_url=None):
         sh_flags.append("launch_target_shared_across_series")
     if skipped_backref:
         sh_flags.append("foreign_deal_reference_excluded=%d_sentence(s)" % skipped_backref)
+    if skipped_series_total:
+        sh_flags.append("separate_series_total_excluded=%d_sentence(s)" % skipped_series_total)
     record["size_history"] = _field(
         size_history or None, "medium" if size_history else None,
         "segmented_prose", f"{len(segments)} state(s)", sh_flags)

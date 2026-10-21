@@ -227,10 +227,12 @@ Still open from both rounds:
 - "Both Series target $500m ... each" (Galilei 2016-1/2017-1): the sentence
   names both series, so the sibling rule excludes it before "each series"
   (which is now accepted, Kilimanjaro 2018-1) can apply.
-- Merna Re II 2022-2 / 2022-3: "Enabling State Farm to source $500 million
-  ... with a full 144A cat bond" is the programme total ($300m + $200m) and
-  is now the launch of both (-60% / -40%). No phrase cue; the right rule is
-  a sibling-registry check "launch == sum of same-year sibling finals".
+- Merna Re II 2022-2 / 2022-3 and 2025-1 / 2025-2: fixed 2026-10-21. The
+  duplicated pages described combined $500m and $1.55bn placements as well as
+  their own series. A candidate aggregate is now excluded only when a sentence
+  explicitly enumerates distinct series and equally many same-currency
+  component amounts that sum to it. Multi-series directory entries retain
+  their aggregate.
 - Vita Capital IV (programme-level page): "The Series II issuance in May
   2010 saw $50m" is an earlier series of the same entry.
 - Kilimanjaro III 2026-1/2026-2: ONE target across two entries, launch None.

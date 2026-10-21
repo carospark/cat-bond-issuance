@@ -23,7 +23,7 @@ every script is cache-first via `src/fetch.py`.
 
 ```bash
 python3 -m venv .venv && ./.venv/bin/python -m pip install -e .
-./.venv/bin/python tests/test_golden.py      # 153 checks, no network
+./.venv/bin/python tests/test_golden.py      # 2,175 checks, no network
 ```
 
 `fetch.py` is cache-first, sets a descriptive User-Agent, and sleeps 2s before

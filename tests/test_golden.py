@@ -55,7 +55,8 @@ from parse_deal import (parse_deal, parse_tranches, check_tranche_sum,  # noqa: 
                         CANCELLED_RE, TIER2_PATTERNS, TRANCHE_SIZE_RES,
                         _governed_by_loss_level, _bindings_by_label,
                         _launch_final, _apply_patterns, _currency,
-                        _segment_prose_dated, _tranche_windows)
+                        _segment_prose_dated, _tranche_windows,
+                        _separate_series_totals)
 PAGES = [
     # Radnor: mortgage-ILS suffixed class labels (M-1A vs M-1).
     # Trinity: prose states a count it never breaks down -- must be flagged.
@@ -79,6 +80,10 @@ PAGES = [
     # Round 3/4: the pages whose defects motivated fixes that no test pinned.
     "finca-re-ltd-series-2022-1",       # deductible as launch size; "did not change"
     "merna-reinsurance-ltd",            # "Class A – $X" forward binding; term loans
+    "merna-re-ii-ltd-series-2022-2",    # $500m belongs to two separately indexed series
+    "merna-re-ii-ltd-series-2022-3",    # same duplicated dual-series placement page
+    "merna-re-ii-ltd-series-2025-1",    # $1.55bn belongs to four separate series
+    "merna-re-ii-ltd-series-2025-2",    # own $300m launch survives programme-total veto
     "everglades-re-ltd-series-2014-1",  # "$2.5 billion layer" as launch size
     "ibrd-car-111-112",                 # range low end as FINAL; per-tranche guidance
     "operational-re-ltd",               # CHF; dated Update headings
@@ -471,6 +476,10 @@ TRANCHE_COUNT = {"akibare-re-pte-ltd-series-2020-1": 1,
 FLAGS = {
     "radnor-re-2019-1-ltd": {"size": "unit_missing"},
     "kilimanjaro-iii-re-ltd-series-2026-2": {"size_history": "launch_target_shared_across_series"},
+    "merna-re-ii-ltd-series-2022-2": {"size_history": "separate_series_total_excluded=3_sentence(s)"},
+    "merna-re-ii-ltd-series-2022-3": {"size_history": "separate_series_total_excluded=3_sentence(s)"},
+    "merna-re-ii-ltd-series-2025-1": {"size_history": "separate_series_total_excluded=2_sentence(s)"},
+    "merna-re-ii-ltd-series-2025-2": {"size_history": "separate_series_total_excluded=2_sentence(s)"},
 }
 
 # Per-tranche values that are NOT deal facts. IBRD 111-112's deal-level
@@ -566,6 +575,10 @@ SIZE_HISTORY = {
     "everglades-re-ltd-series-2014-1": [("launch", "$400m"), ("update_1", "$1.25 billion"),
                                         ("update_2", "$1.5 billion")],
     "merna-reinsurance-ltd": [],          # term loans and a class list; no deal state
+    "merna-re-ii-ltd-series-2022-2": [("update_1", "$200 million")],
+    "merna-re-ii-ltd-series-2022-3": [("update_1", "$300 million")],
+    "merna-re-ii-ltd-series-2025-1": [("launch", "$200 million")],
+    "merna-re-ii-ltd-series-2025-2": [("launch", "$300 million")],
     "finca-re-ltd-series-2022-1": [("update_1", "$75 million")],   # not the $15m deductible
     "citrus-re-ltd-series-2014-2": [("launch", "$50m"), ("update_1", "$50m")],
     "baltic-pcc-limited-series-2025-1": [("launch", "\u00a3100 million"),
@@ -1049,6 +1062,14 @@ def unit_component_scope():
         ("the target issuance size has increased to $330 million", False),
     ]:
         check(bool(TRANCHE_DROPPED_RE.search(text)) == want, f"UNIT tranche-dropped {text[:30]!r}")
+    merna = ("Two series were issued at the same time, this $200 million Merna Re II "
+             "Series 2022-2, while a $300 million Merna Re II Series 2022-3 issuance "
+             "came to market at the same time.")
+    check(_separate_series_totals(merna, {"2022-2", "RE II"}) == {500_000_000.0},
+          "UNIT separate-series total is derived", repr(_separate_series_totals(merna, {"2022-2", "RE II"})))
+    check(_separate_series_totals(merna, {"2022-2", "2022-3", "RE II"}) == set(),
+          "UNIT multi-series entry keeps its aggregate", repr(_separate_series_totals(
+              merna, {"2022-2", "2022-3", "RE II"})))
     for v, want in [("77.25%", True), ("90.5%", True), ("22.75%", False), ("6,25%", False)]:
         check(_spread_is_price(v) == want, f"UNIT spread-is-price {v}", f"want={want}")
     f = _apply_patterns("spread_risk_margin", TIER2_PATTERNS["spread_risk_margin"],
@@ -1517,15 +1538,17 @@ def main():
     # that empties a field silently removes its checks and the suite still
     # reports "all passed" on a smaller suite.
     # 1759 = 192 unit + 1567 golden when the golden pin was measured over raw/
-    # (2026-09-23). Since then 16 UNIT checks were added (class maturity), and
+    # (2026-09-23). Since then 18 UNIT checks were added (class maturity and
+    # separate-series totals),
     # 340 golden checks were revived (2026-10-02): the per-tranche pct/spread/
     # EL<=AP, Seaside and Citrus guards had sat inside the check-count failure
     # branch, after the page loop, so they ran only when the count was already
-    # wrong, and then only over the last page.
+    # wrong, and then only over the last page. Four Merna pages added 58 golden
+    # checks when the separate-series-total rule was pinned (2026-10-21).
     # The tiers are pinned separately so unit checks can be added without
     # touching the golden pin, which has only ever been measured over raw/.
-    EXPECTED_UNIT_CHECKS = 208
-    EXPECTED_GOLDEN_CHECKS = 1907
+    EXPECTED_UNIT_CHECKS = 210
+    EXPECTED_GOLDEN_CHECKS = 1965
     n_golden = len(results) - n_unit
     if n_unit != EXPECTED_UNIT_CHECKS:
         results.append((False, "GUARD unit-check-count",
