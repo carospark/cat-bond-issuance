@@ -50,6 +50,7 @@ from parse_deal import (_is_backward_reference, sentences,  # noqa: E402
                         SPECULATIVE_SIZE_RE, TRANCHE_OF_RE)
 from mentions import canon_label, classify  # noqa: E402
 from net_supply import usd_millions, convert_size, issue_month, load_fx  # noqa: E402
+import roll_forward as rf  # noqa: E402
 from parse_deal import (parse_deal, parse_tranches, check_tranche_sum,  # noqa: E402
                         MONTHS, TIER1_KEYS, MONEY_RE, NEGATED_RESIZE_RE,
                         CANCELLED_RE, TIER2_PATTERNS, TRANCHE_SIZE_RES,
@@ -898,6 +899,7 @@ def unit_predicates():
         got = (c["basis"], None if c["usd_m"] is None else round(c["usd_m"], 5),
                c["local_m"], c["currency"], c["fx_usd_per_unit"])
         check(got == want, f"UNIT convert_size {size!r} {date!r}", f"want={want} got={got}")
+    unit_roll_forward()
     for text, want in [
         ("this issuance remains at UK \u00a3100 million in size, but the spread", True),
         ("did not change in size, so will secure the company $75 million", True),
@@ -981,6 +983,128 @@ from parse_deal import (_each_scoped, LABELLED_NOTES_RE, COUNTED_TRANCHES_RE,  #
                         _series_tokens, LC_ZERO_RE, LC_SPECULATIVE_RE, _bindings_by_label,
                         TRANCHE_DROPPED_RE, _per_tranche_amount, TRANCHE_WITHDRAWN_RE, CLASS_STOPWORDS)
 from mentions import extract as mentions_extract  # noqa: E402
+
+
+def unit_roll_forward():
+    """The deal-level principal ledger on synthetic deals: every convention
+    the module documents is pinned here, and each was mutation-tested."""
+    import pandas as pd
+
+    def deals(rows):
+        cols = ["deal_slug", "index_issuer_name", "size", "date_of_issue", "maturity_date",
+                "maturity_date_derived", "maturity_scheduled", "deal_is_private", "deal_status"]
+        return pd.DataFrame([dict(zip(cols, r)) for r in rows], columns=cols, dtype=str).fillna("")
+
+    def losses(rows):
+        cols = ["cat_bond", "deal_slug", "orig_size", "loss_amount", "date_of_loss",
+                "loss_status", "loss_amount_derived", "is_settled"]
+        return pd.DataFrame([dict(zip(cols, r)) for r in rows], columns=cols, dtype=str).fillna("")
+
+    def stock(book, year, as_of="2026-08"):
+        f = rf.monthly_flows(book)
+        y = rf.outstanding_by_year(f, as_of).set_index("year")
+        return round(float(y.outstanding.get(year, 0.0)), 3)
+
+    # 1. Dates and names.
+    for text, want in [("Sep 2022", ("2022-09", False)), ("2017 / 18", ("2017-12", True)),
+                       ("2020/21", ("2020-12", True)), ("2024 / 2025 risk period", ("2024-12", True)),
+                       ("TBC", (None, None))]:
+        got = rf.loss_month(text)
+        check(got == want, f"UNIT loss_month {text!r}", f"want={want} got={got}")
+    for a, b in [("Caelus Re V Ltd. (Series 2018-1) Class B", "Caelus Re V Ltd. (Series 2018-1)"),
+                 ("Residential Reinsurance 2017 Limited (Series 2017-1) Class 11", "Residential Reinsurance 2017 Limited (Series 2017-1)"),
+                 ("Seaside Re 2018-2", "Seaside Re (Series 2018-2)"),
+                 ("Vega Capital Ltd. (Series 2010-1) Class D", "Vega Capital Ltd. (Series 2010-I)"),
+                 ("Kelvin Ltd. (First event notes)", "Kelvin Ltd.")]:
+        check(rf._norm_name(a) == rf._norm_name(b), f"UNIT loss name links {a[:34]!r}",
+              f"{rf._norm_name(a)!r} vs {rf._norm_name(b)!r}")
+    check(rf._norm_name("Caelus Re V Ltd. (Series 2018-1)") != rf._norm_name("Caelus Re V Ltd. (Series 2017-1)"),
+          "UNIT loss name keeps series apart")
+
+    # 2. A plain deal: outstanding from issue to its stated maturity, then gone.
+    d = deals([("a", "A Re Ltd.", "$100m", "Jun 2020", "June 2023", "", "June 2023", "", "issued")])
+    b = rf.deal_book(d, losses([]))
+    check(b.maturity_source.iat[0] == "stated" and b['flags'].iat[0] == "", "UNIT roll-forward stated maturity, no flags", repr(b['flags'].iat[0]))
+    check((stock(b, 2020), stock(b, 2022), stock(b, 2023)) == (100.0, 100.0, 0.0),
+          "UNIT roll-forward plain deal in then out", str((stock(b, 2020), stock(b, 2022), stock(b, 2023))))
+
+    # 3. Written down $40m in 2021: leaves at the loss date, and only $60m matures
+    #    (no double subtraction), so the stock never goes negative.
+    L = losses([("A Re Ltd. (Series 1) Class A", "a", "$100m", "$40m", "2021", "stated_amount", "40000000.0", "True")])
+    b = rf.deal_book(d, L)
+    check((b.written_down_m.iat[0], round(b.remainder_m.iat[0], 6)) == (40.0, 60.0),
+          "UNIT roll-forward write-down nets the maturing amount", str((b.written_down_m.iat[0], b.remainder_m.iat[0])))
+    check((stock(b, 2021), stock(b, 2022), stock(b, 2023)) == (60.0, 60.0, 0.0),
+          "UNIT roll-forward write-down then maturity sums to zero", str((stock(b, 2021), stock(b, 2022), stock(b, 2023))))
+    check("loss_month_imputed" in b['flags'].iat[0], "UNIT roll-forward year-only loss date is flagged", b['flags'].iat[0])
+
+    # 4. The loss settled after the scheduled maturity: the remainder leaves at
+    #    settlement, not before (an implicit extension).
+    L = losses([("A Re Ltd.", "a", "$100m", "$40m", "Mar 2024", "stated_amount", "40000000.0", "True")])
+    b = rf.deal_book(d, L)
+    check(b.repay_month.iat[0] == "2024-03" and "repay_after_maturity_loss_settlement" in b['flags'].iat[0],
+          "UNIT roll-forward remainder waits for a later settlement", f"{b.repay_month.iat[0]} {b['flags'].iat[0]}")
+    check((stock(b, 2023), stock(b, 2024)) == (100.0, 0.0), "UNIT roll-forward late settlement keeps stock through 2023",
+          str((stock(b, 2023), stock(b, 2024))))
+
+    # 5. A stated extension carries the extended portion to its date.
+    L = losses([("A Re Ltd. Class A", "a", "$100m", "$70m returned to investors. Maturity extended to June 2025 for remaining $30m.",
+                 "Sep 2022", "extended", "", "False")])
+    b = rf.deal_book(d, L)
+    check((b.extended_m.iat[0], b.extension_month.iat[0], round(b.remainder_m.iat[0], 6)) == (30.0, "2025-06", 70.0),
+          "UNIT roll-forward stated extension amount and month", str((b.extended_m.iat[0], b.extension_month.iat[0], b.remainder_m.iat[0])))
+    check((stock(b, 2023), stock(b, 2024), stock(b, 2025)) == (30.0, 30.0, 0.0),
+          "UNIT roll-forward extended portion outstanding until its date", str((stock(b, 2023), stock(b, 2024), stock(b, 2025))))
+
+    # 6. An unresolved loss with no date is carried, but no further than the cap.
+    L = losses([("A Re Ltd. Class A", "a", "$100m", "TBC. Mark to market implied 50% loss.", "Sep 2022", "marked_to_market", "", "False")])
+    b = rf.deal_book(d, L, as_of="2030-08")
+    check(b.extension_month.iat[0] == "2026-06" and "extension_open_capped_36m" in b['flags'].iat[0],
+          "UNIT roll-forward open extension capped at 36 months", f"{b.extension_month.iat[0]} {b['flags'].iat[0]}")
+    check((stock(b, 2025, "2030-08"), stock(b, 2026, "2030-08")) == (100.0, 0.0),
+          "UNIT roll-forward capped carry leaves at the cap", str((stock(b, 2025, "2030-08"), stock(b, 2026, "2030-08"))))
+    b = rf.deal_book(d, L, as_of="2024-08")
+    check(b.extension_month.iat[0] == "2024-09" and "extension_open_carried_to_as_of" in b['flags'].iat[0],
+          "UNIT roll-forward open extension still outstanding at as-of", f"{b.extension_month.iat[0]} {b['flags'].iat[0]}")
+
+    # 7. A recovery to investors is added back against the write-down.
+    L = losses([("A Re Ltd.", "a", "$100m", "Principal reduced by $40m; $15m returned to investors after subrogation.",
+                 "Jun 2021", "partial_loss", "40000000.0", "True")])
+    b = rf.deal_book(d, L)
+    check((b.written_down_m.iat[0], b.recovered_m.iat[0], round(b.remainder_m.iat[0], 6)) == (40.0, 15.0, 75.0),
+          "UNIT roll-forward recovery added back", str((b.written_down_m.iat[0], b.recovered_m.iat[0], b.remainder_m.iat[0])))
+    check(stock(b, 2022) == 75.0 and stock(b, 2023) == 0.0, "UNIT roll-forward recovery in the stock", str((stock(b, 2022), stock(b, 2023))))
+
+    # 8. No maturity on the page: imputed term by class, flagged; a "cancelled"
+    #    status does not remove the deal but is flagged.
+    d2 = deals([("p", "P Re Ltd.", "$100m", "Jun 2020", "", "", "", "", "cancelled"),
+                ("q", "Q Notes", "$10m", "Jun 2020", "", "", "", "True", "issued")])
+    b = rf.deal_book(d2, losses([]))
+    check(list(b.maturity_source) == ["imputed_public_36m", "imputed_private_12m"]
+          and list(b.maturity_month) == ["2023-06", "2021-06"],
+          "UNIT roll-forward imputed terms by class", f"{list(b.maturity_source)} {list(b.maturity_month)}")
+    check("term_imputed" in b['flags'].iat[0] and "deal_status_cancelled_ignored" in b['flags'].iat[0],
+          "UNIT roll-forward imputation and status flags", b['flags'].iat[0])
+    d3 = deals([("p", "P Re Ltd.", "$100m", "Jun 2020", "", "", "", "", "cancelled"),
+                ("m", "Bellemeade Re Ltd.", "$100m", "Jun 2020", "", "", "", "", "issued"),
+                ("n", "N Re Ltd.", "Not issued", "Jun 2020", "", "", "", "", "not_issued")])
+    sel = rf.select_book(rf.deal_book(d3, losses([])), exclude_mortgage=True)
+    check(list(sel.slug) == ["p"], "UNIT roll-forward book keeps a 'cancelled' deal, drops mortgage and sizeless",
+          str(list(sel.slug)))
+    b = rf.deal_book(d2, losses([]), term_months={"public": {2020: 48}, "private": 12})
+    check(b.maturity_month.iat[0] == "2024-06" and b.maturity_source.iat[0] == "imputed_public_vintage",
+          "UNIT roll-forward vintage imputation map", f"{b.maturity_month.iat[0]} {b.maturity_source.iat[0]}")
+    cov = rf.coverage(b)
+    check(abs(cov.share_pct.sum() - 100) < 1e-9 and set(cov.maturity_source) == {"imputed_public_vintage", "imputed_private_12m"},
+          "UNIT roll-forward coverage shares sum to 100", cov.to_string())
+
+    # 9. Legacy decomposition: no_netting - netted equals the written-down amount
+    #    once the deal has matured.
+    L = losses([("A Re Ltd.", "a", "$100m", "$40m", "2021", "stated_amount", "40000000.0", "True")])
+    b = rf.deal_book(d, L)
+    v = rf.legacy_variants(b, rf.monthly_flows(b))
+    check(round(v.loc[2023, "netted"] - v.loc[2023, "no_netting"], 6) == 40.0 and round(v.loc[2023, "no_netting"], 6) == -40.0,
+          "UNIT roll-forward legacy double subtraction equals the write-down", v.loc[2023].to_dict().__repr__())
 
 
 def unit_component_scope():
@@ -1580,7 +1704,7 @@ def main():
     # checks when the separate-series-total rule was pinned (2026-10-21).
     # The tiers are pinned separately so unit checks can be added without
     # touching the golden pin, which has only ever been measured over raw/.
-    EXPECTED_UNIT_CHECKS = 231
+    EXPECTED_UNIT_CHECKS = 262
     EXPECTED_GOLDEN_CHECKS = 1965
     n_golden = len(results) - n_unit
     if n_unit != EXPECTED_UNIT_CHECKS:

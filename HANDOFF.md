@@ -3,6 +3,85 @@
 Read `PARSER_BACKLOG.md` first. It is the current state: what is parsed, what
 is validated, and everything still worth fixing, ordered by value per hour.
 
+## Checkpoint (2026-10-25, later): outstanding principal as a deal-level roll-forward
+
+`src/roll_forward.py` replaces the approximation in `net_supply.py` (issue +
+3 years where no maturity was stated, settled losses subtracted at the loss
+date and the full size subtracted again at maturity). Per deal, monthly:
+issued at the issue month; written down at the loss month (`losses.csv`,
+tranche rows summed to the deal, year-only dates placed in that December and
+flagged); recoveries returned to investors added back; the remainder repaid
+at the scheduled maturity, or at the last loss settlement if that came
+later; a stated extension carries its portion to the stated date; an
+unresolved loss with no date is carried past maturity to the as-of month or
+36 months after the scheduled maturity, whichever is first (flag
+`extension_open_capped_36m`). Stock is measured at each December and at
+2026-08 for the final year, the directory snapshot month. `net_supply.py`
+now takes its stock from this module; `data/net_supply.csv` has
+`our_repaid`, `our_written_down`, `our_recovered` in place of `our_matured`
+and `our_lost`.
+
+- Loss linkage: the losses table links 60 of 114 rows to a deal page itself.
+  A normalised-name match (tranche suffix stripped, series roman numerals
+  mapped, "Seaside Re 2018-2" read as a series) links 53 more; 1 row stays
+  unlinked and is written down at market level. By settled dollars: $2,443m
+  table-linked, $2,688m name-matched, $0 unlinked.
+- Coverage of the maturity leg by issued dollars, ex-mortgage: stated
+  26.1%, derived from a stated term 26.7%, imputed 47.2% (public, 36 months,
+  450 deals, $97.9bn, 43.7%; private, 12 months, 208 deals, 3.5%). The
+  imputed terms are the medians of the stated issue-to-maturity span by
+  class (36.5 and 12 months). The quantity the publisher's 51.5% referred to
+  is `stated + derived` = 52.8% here (343 stated, 237 derived). A vintage-
+  specific imputation (size-weighted mean known term by issue year,
+  `--impute vintage`) was run as a sensitivity and rejected: it overshoots
+  the publisher by 4.0bn in 2018, 6.5bn in 2025 and 9.6bn in 2026, where the
+  flat median is within 1bn in 2025.
+- Outstanding vs the publisher ($m, ex-mortgage), old approximation ->
+  roll-forward: 2019 -1,976 -> -1,594; 2020 -6,075 -> -4,678; 2021 -5,457
+  -> -3,291; 2022 -5,345 -> -2,468; 2023 -7,414 -> -3,805; 2024 -6,167 ->
+  -2,181; 2025 -4,864 -> +724; 2026 (at 2026-08) -1,664 -> +4,121. Holding
+  the new book fixed and only switching the netting of write-downs off and
+  on, the double subtraction alone accounted for 2,436 (2020), 3,024 (2021),
+  3,395 (2022), 4,170 (2023), 4,478 (2024), 4,815 (2025) and 4,934 (2026) of
+  the old gap: 40 to 56% in 2020-2023, 73% in 2024, 99% in 2025, and more
+  than the whole gap in 2026, where the rest of the old rule (36 months for
+  every deal without a maturity, private ones included; no extensions)
+  had been pulling the other way. `data/validation_dashboards/outstanding.csv`
+  carries `legacy_3y`, `no_netting`, `netted` and `double_subtraction_m` per
+  year beside the publisher series and the coverage shares.
+- What remains, by sign. 2020-2024 still 2.2 to 4.7bn low: 2014-2017
+  vintages carry known terms of 38 to 60 months size-weighted, so 36 months
+  retires the imputed half of those cohorts a year early; the publisher
+  also keeps unresolved notes on its books longer than the cap in some
+  cases. 2026 4.1bn high: our scheduled maturities exceed the publisher's
+  upcoming-maturities chart (`data/validation_dashboards/maturities.csv`,
+  Q3 2026 to Q2 2030) by 4.7bn in the window, with +2.6bn in Q4 2026 (12
+  imputed late-2023 deals, $2.5bn) and +4.7bn in Q4 2028 against -1.8bn in
+  Q1 2029 and -3.1bn in Q3 2029: December issues mature in January in the
+  stated sample (median offset +1 month, n=16), and recent large deals run
+  four years where 36 months is imputed. Stated maturities sit at issue +
+  term in 41% of dollars, +1 month in 24%, +2 in 9%, -1 in 8%; the mode is
+  used, no offset. The binding input is the imputed 43.7%: the companion
+  repository holds TRACE maturity dates for 700 bridged deals, and feeding
+  those back as a maturity source would replace most of the imputation.
+- Found and not fixed (parser): `deal_status = cancelled` is a false
+  positive on all five deals carrying it. Everglades Re II 2024-1 ($1.1bn):
+  the page says the 2024-2 sibling was withdrawn; Atlas IX 2013-1 and
+  Tradewynd 2013-2: one tranche was pulled; Azzurro II 2024-1 and Titania
+  2024-1: no withdrawal language found. The publisher's 2013 and 2024
+  issuance totals include all five to within 1m. The roll-forward keeps
+  them (`select_book`, flag `deal_status_cancelled_ignored`); the
+  `terminal_status` cue in `parse_deal` needs a sibling and tranche veto.
+  Backlog item.
+- Tests 2196 -> **2227** (231 -> 262 unit): synthetic-deal checks for the
+  write-down netting, late settlement, stated extension, open-extension cap
+  and carry, recovery add-back, class imputation and vintage map, coverage
+  shares, legacy decomposition, book selection, `loss_month`, and the
+  name linker on five real loss-table names. Six mutations: netting off
+  (5 fail), cap off (2), extension date ignored (2), recoveries off (2),
+  year-only losses in June (3), status filter back (1 after the selection
+  was factored out so the unit tier reaches it; it was green before that).
+
 ## Checkpoint (2026-10-25): issue-month FX for non-USD sizes; mortgage filter fixed in the dashboards
 
 Repository moved the same day from `~/Desktop/cat-bond-issuance` (iCloud

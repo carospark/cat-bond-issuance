@@ -154,6 +154,14 @@ convention (issue-month rate?) instead of dropping them.
 
 ## 7. Known-opens from reviews never closed
 
+- `deal_status = cancelled` fires on a withdrawn SIBLING series or a pulled
+  TRANCHE (Everglades Re II 2024-1 "$1.1bn": "The Series 2024-2 notes ...
+  withdrawn"; Atlas IX 2013-1 and Tradewynd 2013-2: one tranche pulled).
+  All five cancelled deals are in the publisher's issuance totals. Read
+  2026-10-25 while building `roll_forward.py`, which ignores the status and
+  flags it; the `terminal_status` cue needs the sibling and tranche vetoes
+  the size reader already has.
+
 - `coupon of X% to Y%` returns the low end (round-3; Lion I was right by luck).
 - Mutation table said several guards deletable-green (round-3 report §Priority D
   in `REVIEW_ROUND3.md`, local); re-run the mutation sweep after any batch.

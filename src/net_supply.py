@@ -1,7 +1,7 @@
 """Net market supply: our reconstruction vs Artemis's own issued/outstanding.
 
     issued(y)       Tier-1 sizes summed by issue year        (index.csv, complete)
-    outstanding(y)  cumulative issued - matured - lost
+    outstanding(y)  deal-level roll-forward                  (roll_forward.py)
 
 Artemis publishes the same two series on its issued-and-outstanding dashboard,
 aggregated from the same directory. Matching them validates the parse end to
@@ -21,6 +21,13 @@ USD figure, the basis it rests on, and the local amount and currency so the
 original is never lost. A deal whose month has no rate is returned with a
 None USD value and basis `fx_rate_missing`, never summed as dollars and never
 silently dropped: callers report it.
+
+Outstanding principal used to be approximated here (issue + 3 years where no
+maturity was stated, settled losses subtracted at the loss date and the full
+size subtracted again at maturity). That double subtraction ran 2.4 to 4.9bn
+low in 2020-2026 and is gone: the stock now comes from `roll_forward.py`, a
+deal-level ledger with netted write-downs, extensions and recoveries, and a
+flagged imputed term for deals with no maturity.
 
 Outputs stay local (data derived from Artemis): data/net_supply.csv,
 plots/net_supply.png.
@@ -46,8 +53,6 @@ DASH = ("https://www.artemis.bm/dashboard/"
 MORTGAGE_RE = re.compile(
     r"bellemeade|oaktown|eagle re|radnor|home re|triangle re|"
     r"cherry blossom|greystone|sierra ltd|splitrock", re.IGNORECASE)
-
-DEFAULT_TERM_YEARS = 3          # where the page states no term
 
 FX_TABLE = ROOT / "src" / "fx_monthly_usd.csv"
 _FX_CACHE = None
@@ -147,7 +152,8 @@ def usd_millions(size_text):
     return (n / 1e6 if n else None), "non_usd_unconverted"
 
 
-def build(exclude_mortgage):
+def issued_by_year(exclude_mortgage):
+    """Tier-1 sizes by issue year from index.csv, on a USD basis."""
     idx = pd.read_csv(ROOT / "data" / "index.csv", keep_default_na=False, dtype=str)
     idx["year"] = idx.date_text.str[-4:].astype(int)
     if exclude_mortgage:
@@ -156,43 +162,7 @@ def build(exclude_mortgage):
     idx["usd_m"] = [c["usd_m"] for c in conv]
     idx["fx"] = [c["basis"] for c in conv]
     idx["local_m"] = [c["local_m"] for c in conv]
-    idx["currency"] = [c["currency"] for c in conv]
-
     issued = idx.groupby("year").usd_m.sum(min_count=1).rename("our_issued")
-
-    # Maturity: parsed schedule where a cached page states one, else issue+3y.
-    q = pd.read_csv(ROOT / "data" / "queue.csv", keep_default_na=False, dtype=str)
-    stated = {}
-    try:
-        deals = pd.read_csv(ROOT / "data" / "deals.csv",
-                            keep_default_na=False, dtype=str)
-        for _, r in deals.iterrows():
-            m = re.search(r"(\d{4})", str(r.get("maturity_scheduled", "")))
-            if m:
-                stated[r.deal_slug] = int(m.group(1))
-    except FileNotFoundError:
-        pass
-    idx["slug"] = idx.deal_url.str.rstrip("/").str.rsplit("/", n=1).str[-1]
-    idx["mat_year"] = [
-        stated.get(s, y + DEFAULT_TERM_YEARS)
-        for s, y in zip(idx.slug, idx.year)]
-    matured = idx.groupby("mat_year").usd_m.sum(min_count=1).rename("our_matured")
-
-    # Settled losses reduce outstanding at the loss date.
-    losses = pd.read_csv(ROOT / "data" / "losses.csv",
-                         keep_default_na=False, dtype=str)
-    sl = losses[(losses.is_settled == "True")
-                & (losses.loss_amount_derived.str.strip() != "")].copy()
-    sl["loss_year"] = sl.date_of_loss.str.extract(r"(\d{4})")[0]
-    sl = sl.dropna(subset=["loss_year"])
-    sl["loss_m"] = sl.loss_amount_derived.astype(float) / 1e6
-    lost = sl.groupby(sl.loss_year.astype(int)).loss_m.sum().rename("our_lost")
-
-    years = range(idx.year.min(), 2027)
-    t = pd.DataFrame(index=years).join([issued, matured, lost]).fillna(0.0)
-    # A lost dollar must not also count as maturing later; the approximation
-    # accepts that overlap (losses are small next to maturities) and reports it.
-    t["our_outstanding"] = (t.our_issued - t.our_matured - t.our_lost).cumsum()
     conv_rows = idx[idx.fx == "usd_converted"]
     miss_rows = idx[idx.fx == "fx_rate_missing"]
     stats = {"n_deals": len(idx),
@@ -200,8 +170,24 @@ def build(exclude_mortgage):
              "converted_local_m": conv_rows.local_m.sum(),
              "converted_usd_m": conv_rows.usd_m.sum(),
              "n_fx_missing": len(miss_rows),
-             "fx_missing_local_m": miss_rows.local_m.sum(),
-             "stated_maturities": sum(1 for s in idx.slug if s in stated)}
+             "fx_missing_local_m": miss_rows.local_m.sum()}
+    return issued, stats
+
+
+def build(exclude_mortgage):
+    """Issued by year joined to the roll-forward's stock and flows."""
+    import roll_forward as rf
+    issued, stats = issued_by_year(exclude_mortgage)
+    book, losses, flows = rf.build(exclude_mortgage=exclude_mortgage)
+    yearly = rf.outstanding_by_year(flows).set_index("year")
+    t = pd.DataFrame(index=range(int(issued.index.min()), int(rf.AS_OF[:4]) + 1))
+    t = t.join(issued).join(yearly[["repaid", "written_down", "recovered", "outstanding", "measured_at"]]
+                            .rename(columns={"repaid": "our_repaid", "written_down": "our_written_down",
+                                             "recovered": "our_recovered", "outstanding": "our_outstanding"}))
+    cov = rf.coverage(book).set_index("maturity_source").share_pct
+    stats.update({"book_deals": len(book),
+                  "stated_maturities": int((book.maturity_source == "stated").sum()),
+                  "pct_dollars_stated_or_derived": float(cov.get("stated", 0) + cov.get("derived_from_term", 0))})
     return t.reset_index().rename(columns={"index": "year"}), stats
 
 
@@ -212,12 +198,12 @@ def main():
         cmpd = theirs.merge(ours, on="year", how="inner")
         cmpd["issued_diff"] = cmpd.our_issued - cmpd.artemis_issued
         cmpd["out_diff"] = cmpd.our_outstanding - cmpd.artemis_outstanding
-        print("\n=== %s  (%d deals, %d stated maturities; %d non-USD deals "
-              "converted at issue-month rates, %.0fm local -> $%.0fm; "
-              "%d with no rate, %.0fm local, excluded from sums) ==="
+        print("\n=== %s  (%d deals, %d stated maturities, %.1f%% of issued dollars with a stated "
+              "or term-derived maturity; %d non-USD deals converted at issue-month rates, "
+              "%.0fm local -> $%.0fm; %d with no rate, %.0fm local, excluded from sums) ==="
               % (label, stats["n_deals"], stats["stated_maturities"],
-                 stats["n_converted"], stats["converted_local_m"],
-                 stats["converted_usd_m"], stats["n_fx_missing"],
+                 stats["pct_dollars_stated_or_derived"], stats["n_converted"],
+                 stats["converted_local_m"], stats["converted_usd_m"], stats["n_fx_missing"],
                  stats["fx_missing_local_m"]))
         print("  mean |issued diff|:      $%6.0fm   (their mean issued $%.0fm)"
               % (cmpd.issued_diff.abs().mean(), cmpd.artemis_issued.mean()))
@@ -228,6 +214,10 @@ def main():
         for _, r in w.head(4).iterrows():
             print("     %d  ours %8.0f  theirs %8.0f  diff %+7.0f"
                   % (r.year, r.our_issued, r.artemis_issued, r.issued_diff))
+        print("  outstanding, 2019 onward (ours / theirs / diff):")
+        for _, r in cmpd[cmpd.year >= 2019].iterrows():
+            print("     %d  %8.0f  %8.0f  %+7.0f   (measured at %s)"
+                  % (r.year, r.our_outstanding, r.artemis_outstanding, r.out_diff, r.measured_at))
         if excl:
             cmpd.to_csv(ROOT / "data" / "net_supply.csv", index=False)
             print("\nwrote data/net_supply.csv")
