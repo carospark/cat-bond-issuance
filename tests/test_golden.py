@@ -49,7 +49,7 @@ from parse_deal import (_is_backward_reference, sentences,  # noqa: E402
                         _cites_only_foreign_series,
                         SPECULATIVE_SIZE_RE, TRANCHE_OF_RE)
 from mentions import canon_label, classify  # noqa: E402
-from net_supply import usd_millions  # noqa: E402
+from net_supply import usd_millions, convert_size, issue_month, load_fx  # noqa: E402
 from parse_deal import (parse_deal, parse_tranches, check_tranche_sum,  # noqa: E402
                         MONTHS, TIER1_KEYS, MONEY_RE, NEGATED_RESIZE_RE,
                         CANCELLED_RE, TIER2_PATTERNS, TRANCHE_SIZE_RES,
@@ -865,6 +865,39 @@ def unit_predicates():
                        ("$1.5 billion", (1500.0, "usd")), ("$298.89", (None, "unit_missing"))]:
         got = usd_millions(text)
         check(got == want, f"UNIT usd_millions {text!r}", f"want={want} got={got}")
+    # Issue-month FX. The table is tracked (src/fx_monthly_usd.csv); these pin
+    # the source series (ECB monthly average, BoE XUMAUSS), the cross-rate
+    # direction (USD per unit, so CAD and NZD are below 1), and that a month
+    # without a rate yields an honest None with the local amount kept.
+    fx = load_fx()
+    for ccy, month, want in [("EUR", "2005-11", 1.178573), ("GBP", "2025-03", 1.2911),
+                             ("CAD", "2025-01", 0.694709), ("NZD", "2023-05", 0.621662)]:
+        got = fx.get((ccy, month))
+        check(got is not None and abs(got - want) < 1e-6,
+              f"UNIT fx table {ccy} {month}", f"want={want} got={got}")
+    check(("EUR", "1998-12") not in fx and ("GBP", "1998-12") in fx,
+          "UNIT fx table coverage: ECB from 1999-01, BoE from 1996-01")
+    for text, want in [("Nov 2005", "2005-11"), ("November 2005", "2005-11"),
+                       ("12 June 2024", "2024-06"), ("2005-11-03", "2005-11"),
+                       ("", None), ("Unknown", None)]:
+        got = issue_month(text)
+        check(got == want, f"UNIT issue_month {text!r}", f"want={want} got={got}")
+    for size, date, want in [
+        ("EUR200m", "Nov 2005", ("usd_converted", 235.7146, 200.0, "EUR", 1.178573)),
+        ("\u00a3100m", "Mar 2025", ("usd_converted", 129.11, 100.0, "GBP", 1.2911)),
+        ("C$150m", "Jan 2025", ("usd_converted", 104.20635, 150.0, "CAD", 0.694709)),
+        ("NZ$225m", "May 2023", ("usd_converted", 139.87395, 225.0, "NZD", 0.621662)),
+        ("\u20ac190m ($262m)", "Apr 2014", ("usd_equiv", 262.0, 190.0, "EUR", None)),
+        ("$1.5 billion", "Jun 2020", ("usd", 1500.0, None, "USD", None)),
+        ("$473.18", "Feb 2019", ("unit_missing", None, None, None, None)),
+        ("Not issued", "Jan 2020", ("excluded", None, None, None, None)),
+        ("EUR 50m", "Jan 1998", ("fx_rate_missing", None, 50.0, "EUR", None)),
+        ("\u20ac100m", "", ("fx_rate_missing", None, 100.0, "EUR", None)),
+    ]:
+        c = convert_size(size, date)
+        got = (c["basis"], None if c["usd_m"] is None else round(c["usd_m"], 5),
+               c["local_m"], c["currency"], c["fx_usd_per_unit"])
+        check(got == want, f"UNIT convert_size {size!r} {date!r}", f"want={want} got={got}")
     for text, want in [
         ("this issuance remains at UK \u00a3100 million in size, but the spread", True),
         ("did not change in size, so will secure the company $75 million", True),
@@ -1547,7 +1580,7 @@ def main():
     # checks when the separate-series-total rule was pinned (2026-10-21).
     # The tiers are pinned separately so unit checks can be added without
     # touching the golden pin, which has only ever been measured over raw/.
-    EXPECTED_UNIT_CHECKS = 210
+    EXPECTED_UNIT_CHECKS = 231
     EXPECTED_GOLDEN_CHECKS = 1965
     n_golden = len(results) - n_unit
     if n_unit != EXPECTED_UNIT_CHECKS:

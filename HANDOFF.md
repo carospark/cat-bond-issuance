@@ -3,6 +3,61 @@
 Read `PARSER_BACKLOG.md` first. It is the current state: what is parsed, what
 is validated, and everything still worth fixing, ordered by value per hour.
 
+## Checkpoint (2026-10-25): issue-month FX for non-USD sizes; mortgage filter fixed in the dashboards
+
+Repository moved the same day from `~/Desktop/cat-bond-issuance` (iCloud
+Drive sync; 185 raw pages and 6,008 venv files were evicted) to
+`~/cat-bond-issuance`; the venv's embedded interpreter paths were rewritten.
+The analysis repository is at `~/cat-bond-flow-analysis`.
+
+- `src/fx_monthly_usd.csv` (tracked, 1,368 rows): USD per unit, monthly
+  averages, EUR/CAD/NZD from the ECB reference rates (CAD and NZD as the
+  cross of two ECB series), GBP from the Bank of England series XUMAUSS; the
+  file header cites both and the download date. `net_supply.convert_size`
+  is the single derivation: `usd` as stated, `usd_equiv` where the page gives
+  a parenthetical dollar figure (7 deals; the local amount is kept beside
+  it), `usd_converted` at the issue-month rate (32 deals, 4,450m local ->
+  $4,848m), `fx_rate_missing` when the month has no rate (0 deals today; the
+  USD value is None and the local amount and currency are kept), plus the
+  existing `unit_missing` (2) and `excluded` placeholders (11). Nothing is
+  summed as dollars that is not dollars, and nothing disappears:
+  `data/validation_dashboards/size_basis.csv` counts every deal by year and
+  basis, and the local `data/fx_conversions.csv` lists each converted deal
+  with its rate.
+- Found while comparing: `validate_dashboards.py` applied `MORTGAGE_RE` to
+  the slug, where "eagle re", "home re", "triangle re" and "sierra ltd" never
+  match a hyphenated slug. 23 of 62 mortgage deals stayed in the sums, which
+  is the whole +3.8% in the tracked issuance table and the +9 to +20pp
+  indemnity gap in 2019-2021. Both charts now exclude by issuer name
+  (`ex_mortgage`), as `net_supply.py` always did.
+- Issuance vs publisher, 1997-2026, ex-mortgage: tracked file before this
+  commit +3.804% signed, 3.96% summed absolute, 11 years over 1%; with the
+  filter fixed and no FX -0.070% / 0.586% / 6 years; committed (filter + FX)
+  +0.107% / 0.549% / 6 years. FX moved 2019 from -19.0m to -0.3m, 2023 from
+  -5.0m to +1.5m, 2024 from -39.3m to -0.8m, 2026 from -30.5m to +1.7m; it
+  moved 2005 from +200.0m to +235.7m and 2006 from +251.9m to +304.9m, and
+  those two residuals are exactly FCC Sparc 2005 (EUR200m, motor) and
+  Crystal Credit 2006 (EUR252m, credit), so the publisher excludes them
+  from its cat bond total; 2020 (-223m) and 2021 (-199m) remain the open
+  years, 2025 is +65m.
+- Trigger mix, mean absolute gap in pp, tracked file -> committed:
+  indemnity 3.36 -> 2.00, industry loss 2.53 -> 1.31, parametric 6.12 ->
+  6.07, unknown 1.72 -> 1.46. 2019, 2022, 2023, 2025 and 2026 now match the
+  publisher to 0.0pp on every trigger. Still open: parametric is -4.7pp in
+  2012 and the 2005-2006 shares differ by 8-25pp (the EUR deals above, and
+  the publisher's basis for those years); 2016 indemnity went from -5.9 to
+  -7.4pp, so one 2016 mortgage deal may be inside the publisher's trigger
+  chart.
+- Golden suite 2175 -> **2196** (210 -> 231 unit, 1965 golden unchanged):
+  21 new UNIT checks pin the table's source values and coverage, the
+  cross-rate direction, `issue_month`, and `convert_size` on every basis.
+  Mutations: divide instead of multiply (4 checks fail), ignore the issue
+  month (6 fail), fall back to the local amount as dollars when no rate
+  exists (2 fail); restored, 2196/2196.
+- `net_supply.py` outstanding series: converted sizes raise 2021-2026
+  issued by 70-130m a year; the 5 to 7bn gap to the publisher's outstanding
+  figure is untouched and is item 3's roll-forward.
+
 ## Checkpoint (2026-10-21): separate-series programme totals
 
 - Merna Re II 2022-2 and 2022-3 no longer take their combined $500m placement

@@ -6,7 +6,17 @@ One comparison per chart, each saved as a CSV table plus one combined plot:
     data/validation_dashboards/trigger_mix.csv    Tier-1 trigger shares by year
     data/validation_dashboards/el_spread.csv      tranche EL & spread averages
     data/validation_dashboards/size_change.csv    launch->final deltas by quarter
+    data/validation_dashboards/size_basis.csv     what entered the USD sums, by year
     plots/validation_dashboards.png
+
+Sizes enter the issuance and trigger-mix sums through `net_supply.convert_size`:
+USD as stated, the publisher's parenthetical USD equivalent where one is given,
+and otherwise the local amount converted at the issue-month rate from
+`src/fx_monthly_usd.csv` (basis `usd_converted`). Deals that cannot be put on
+a USD basis (placeholder sizes, a lost unit, no rate for the month) are not
+summed and not dropped silently: `size_basis.csv` counts every deal by year
+and basis, and `data/fx_conversions.csv` (local, deal level) lists each
+converted or unconvertible deal with its local amount, currency and rate.
 
 All outputs are derived from Artemis data and stay gitignored; this script is
 the tracked, reproducible part. Every number reported in conversation should be
@@ -52,7 +62,9 @@ def series(slug, year_categories=True):
 def load_deals():
     d = pd.read_csv(ROOT / "data" / "deals.csv", keep_default_na=False, dtype=str)
     d["year"] = d.date_of_issue.str.extract(r"(\d{4})")[0].astype(float)
-    d["usd_m"] = [ns.usd_millions(s)[0] for s in d["size"].fillna("")]
+    conv = [ns.convert_size(s, dt) for s, dt in zip(d["size"].fillna(""), d.date_of_issue)]
+    for col in ("usd_m", "basis", "local_m", "currency", "fx_usd_per_unit", "fx_month"):
+        d["size_basis" if col == "basis" else col] = [c[col] for c in conv]
 
     def quarter(s):
         m = re.match(r"([A-Z][a-z]{2})[a-z]*\s+(\d{4})", str(s))
@@ -63,9 +75,42 @@ def load_deals():
     return d
 
 
+def size_basis(d):
+    """Every deal accounted for: by year and basis, how many deals, how many
+    USD millions entered the sums, and how much local-currency principal did
+    not (fx_rate_missing, unit_missing, excluded placeholders)."""
+    t = d.assign(year=d.year.fillna(-1).astype(int))
+    g = (t.groupby(["year", "size_basis"])
+          .agg(n_deals=("deal_slug", "size"), usd_m=("usd_m", "sum"),
+               local_m=("local_m", "sum"))
+          .reset_index())
+    return g.sort_values(["year", "size_basis"]).reset_index(drop=True)
+
+
+def fx_conversions(d):
+    """Deal-level list of every size that was converted or could not be put on
+    a USD basis. Derived from Artemis sizes, so it stays local (data/*.csv)."""
+    keep = d.size_basis.isin(["usd_converted", "fx_rate_missing", "unit_missing", "usd_equiv"])
+    cols = ["deal_slug", "date_of_issue", "size", "size_basis", "local_m",
+            "currency", "fx_month", "fx_usd_per_unit", "usd_m"]
+    return d.loc[keep, cols].sort_values(["size_basis", "date_of_issue"])
+
+
+def ex_mortgage(d):
+    """The publisher's issuance and trigger charts exclude mortgage ILS.
+
+    Match on the directory's issuer name, as net_supply does, not on the slug:
+    `MORTGAGE_RE` holds spaced names ("eagle re", "home re", "triangle re",
+    "sierra ltd") that a hyphenated slug never contains, and until 2026-10-25
+    that left 23 of the 62 mortgage deals in the sums (+3.8% on issuance,
+    +9 to +20pp of indemnity share in 2019-2021).
+    """
+    return d[~d.index_issuer_name.str.contains(ns.MORTGAGE_RE)]
+
+
 def cmp_issuance(d):
     t = series("catastrophe-bonds-ils-issued-and-outstanding-by-year")
-    mort = d[~d.deal_slug.str.contains(ns.MORTGAGE_RE)]
+    mort = ex_mortgage(d)
     ours = mort.groupby("year").usd_m.sum().rename("our_issued_m")
     c = t.rename(columns={"cat": "year"}).set_index("year")[
         ["Issued"]].join(ours).dropna()
@@ -76,7 +121,10 @@ def cmp_issuance(d):
 
 def cmp_trigger(d):
     t = series("cat-bonds-ils-by-trigger-by-year")
-    ours = d.dropna(subset=["usd_m", "year"]).copy()
+    # Excluding mortgage ILS here too takes the 2019, 2022, 2023, 2025 and
+    # 2026 indemnity shares to the publisher's figure exactly; with them in,
+    # the gap was +9 to +20pp in 2019-2021.
+    ours = ex_mortgage(d).dropna(subset=["usd_m", "year"]).copy()
     ours["trig"] = ours.apply(
         lambda r: r.trigger_type or r.get("trigger_type__raw", "") or "Unknown",
         axis=1)
@@ -152,10 +200,22 @@ def main():
         "trigger_mix": cmp_trigger(d),
         "el_spread": cmp_el_spread(d),
         "size_change": cmp_size_change(d),
+        "size_basis": size_basis(d),
     }
     for name, df in results.items():
         df.to_csv(OUT / (name + ".csv"), index=False)
         print("wrote %s (%d rows)" % (OUT / (name + ".csv"), len(df)))
+    fx = fx_conversions(d)
+    fx.to_csv(ROOT / "data" / "fx_conversions.csv", index=False)
+    print("wrote data/fx_conversions.csv (%d rows, local only)" % len(fx))
+    acct = d.groupby("size_basis").agg(n=("deal_slug", "size"), usd_m=("usd_m", "sum"),
+                                       local_m=("local_m", "sum"))
+    print("size basis of all %d deals (usd_m entered the sums; local_m is the "
+          "stated amount in its own currency):" % len(d))
+    print(acct.to_string())
+    not_summed = d[d.usd_m.isna()]
+    print("%d deals carry no USD figure and are outside every sum: %s"
+          % (len(not_summed), dict(not_summed.size_basis.value_counts())))
 
     import matplotlib
     matplotlib.use("Agg")

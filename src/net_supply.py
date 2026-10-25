@@ -13,6 +13,15 @@ exclude mortgage ILS, while index.csv is the full directory. We therefore
 compare twice -- full index, and excluding a name-listed set of mortgage ILS
 programmes -- and the residual should collapse in the second run.
 
+Currency: a size stated in EUR, GBP, CAD or NZD with no parenthetical USD
+equivalent is converted at the monthly average rate of its issue month from
+`src/fx_monthly_usd.csv` (ECB reference rates; Bank of England for GBP; the
+file header cites both). `convert_size` is the one derivation; it returns the
+USD figure, the basis it rests on, and the local amount and currency so the
+original is never lost. A deal whose month has no rate is returned with a
+None USD value and basis `fx_rate_missing`, never summed as dollars and never
+silently dropped: callers report it.
+
 Outputs stay local (data derived from Artemis): data/net_supply.csv,
 plots/net_supply.png.
 """
@@ -26,7 +35,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 from fetch import fetch, _cache_path                     # noqa: E402
-from parse_deal import _money_to_number, unit_missing    # noqa: E402
+from parse_deal import _money_to_number, unit_missing, _currency, MONTHS  # noqa: E402
 
 DASH = ("https://www.artemis.bm/dashboard/"
         "catastrophe-bonds-ils-issued-and-outstanding-by-year/")
@@ -39,6 +48,68 @@ MORTGAGE_RE = re.compile(
     r"cherry blossom|greystone|sierra ltd|splitrock", re.IGNORECASE)
 
 DEFAULT_TERM_YEARS = 3          # where the page states no term
+
+FX_TABLE = ROOT / "src" / "fx_monthly_usd.csv"
+_FX_CACHE = None
+MONTH_RE = re.compile(r"(" + MONTHS + r")[a-z]*\.?\s+(\d{4})", re.IGNORECASE)
+MONTH_NUM = {m: i for i, m in enumerate(
+    "jan feb mar apr may jun jul aug sep oct nov dec".split(), 1)}
+
+
+def load_fx():
+    """{(currency, 'YYYY-MM'): USD per unit} from the tracked monthly table."""
+    global _FX_CACHE
+    if _FX_CACHE is None:
+        t = pd.read_csv(FX_TABLE, comment="#", dtype={"month": str, "currency": str})
+        _FX_CACHE = {(r.currency, r.month): float(r.usd_per_unit)
+                     for r in t.itertuples(index=False)}
+    return _FX_CACHE
+
+
+def issue_month(date_text):
+    """'Nov 2005' / 'November 2005' / '12 Dec 2013' / '2005-11' -> '2005-11'."""
+    s = str(date_text or "")
+    m = MONTH_RE.search(s)
+    if m:
+        return "%s-%02d" % (m.group(2), MONTH_NUM[m.group(1)[:3].lower()])
+    m = re.search(r"\b(\d{4})-(\d{2})\b", s)
+    return "%s-%s" % (m.group(1), m.group(2)) if m else None
+
+
+def convert_size(size_text, date_text):
+    """Size cell + issue date -> one dict, the single USD derivation.
+
+    usd_m            USD millions, or None
+    basis            usd | usd_equiv | usd_converted | fx_rate_missing |
+                     unit_missing | excluded
+    local_m          the stated amount in its own currency (millions), if any
+    currency         ISO code of that currency
+    fx_usd_per_unit  rate applied, only for usd_converted
+    fx_month         issue month the rate was looked up for
+    """
+    usd, basis = usd_millions(size_text)
+    s = str(size_text or "").strip()
+    ccy = _currency(s) if basis not in ("excluded", "unit_missing") else None
+    out = {"usd_m": usd, "basis": basis, "local_m": None, "currency": ccy,
+           "fx_usd_per_unit": None, "fx_month": None}
+    if basis == "usd_equiv":
+        # Keep the stated local amount beside the publisher's own USD figure.
+        n = _money_to_number(re.sub(r"\(.*?\)", "", s))
+        out["local_m"] = n / 1e6 if n else None
+        return out
+    if basis != "non_usd_unconverted":
+        return out
+    out["local_m"] = usd           # usd_millions read the local figure as-is
+    out["usd_m"] = None
+    month = issue_month(date_text)
+    rate = load_fx().get((ccy, month)) if (ccy and month) else None
+    out["fx_month"] = month
+    if rate is None:
+        out["basis"] = "fx_rate_missing"
+        return out
+    out.update(basis="usd_converted", fx_usd_per_unit=rate,
+               usd_m=out["local_m"] * rate if out["local_m"] is not None else None)
+    return out
 
 
 def dashboard_series():
@@ -81,9 +152,11 @@ def build(exclude_mortgage):
     idx["year"] = idx.date_text.str[-4:].astype(int)
     if exclude_mortgage:
         idx = idx[~idx.issuer_name.str.contains(MORTGAGE_RE)]
-    vals = idx.size_text.map(usd_millions)
-    idx["usd_m"] = [v[0] for v in vals]
-    idx["fx"] = [v[1] for v in vals]
+    conv = [convert_size(sz, dt) for sz, dt in zip(idx.size_text, idx.date_text)]
+    idx["usd_m"] = [c["usd_m"] for c in conv]
+    idx["fx"] = [c["basis"] for c in conv]
+    idx["local_m"] = [c["local_m"] for c in conv]
+    idx["currency"] = [c["currency"] for c in conv]
 
     issued = idx.groupby("year").usd_m.sum(min_count=1).rename("our_issued")
 
@@ -120,8 +193,14 @@ def build(exclude_mortgage):
     # A lost dollar must not also count as maturing later; the approximation
     # accepts that overlap (losses are small next to maturities) and reports it.
     t["our_outstanding"] = (t.our_issued - t.our_matured - t.our_lost).cumsum()
+    conv_rows = idx[idx.fx == "usd_converted"]
+    miss_rows = idx[idx.fx == "fx_rate_missing"]
     stats = {"n_deals": len(idx),
-             "unconverted_m": idx.loc[idx.fx == "non_usd_unconverted", "usd_m"].sum(),
+             "n_converted": len(conv_rows),
+             "converted_local_m": conv_rows.local_m.sum(),
+             "converted_usd_m": conv_rows.usd_m.sum(),
+             "n_fx_missing": len(miss_rows),
+             "fx_missing_local_m": miss_rows.local_m.sum(),
              "stated_maturities": sum(1 for s in idx.slug if s in stated)}
     return t.reset_index().rename(columns={"index": "year"}), stats
 
@@ -133,9 +212,13 @@ def main():
         cmpd = theirs.merge(ours, on="year", how="inner")
         cmpd["issued_diff"] = cmpd.our_issued - cmpd.artemis_issued
         cmpd["out_diff"] = cmpd.our_outstanding - cmpd.artemis_outstanding
-        print("\n=== %s  (%d deals, %d stated maturities, $%.0fm unconverted) ==="
+        print("\n=== %s  (%d deals, %d stated maturities; %d non-USD deals "
+              "converted at issue-month rates, %.0fm local -> $%.0fm; "
+              "%d with no rate, %.0fm local, excluded from sums) ==="
               % (label, stats["n_deals"], stats["stated_maturities"],
-                 stats["unconverted_m"]))
+                 stats["n_converted"], stats["converted_local_m"],
+                 stats["converted_usd_m"], stats["n_fx_missing"],
+                 stats["fx_missing_local_m"]))
         print("  mean |issued diff|:      $%6.0fm   (their mean issued $%.0fm)"
               % (cmpd.issued_diff.abs().mean(), cmpd.artemis_issued.mean()))
         print("  mean |outstanding diff|: $%6.0fm   (their mean outst. $%.0fm)"
