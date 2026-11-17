@@ -1096,13 +1096,23 @@ def unit_roll_forward():
     check(b.extension_month.iat[0] == "2024-09" and "extension_open_carried_to_as_of" in b['flags'].iat[0],
           "UNIT roll-forward open extension still outstanding at as-of", f"{b.extension_month.iat[0]} {b['flags'].iat[0]}")
 
-    # 7. A recovery to investors is added back against the write-down.
-    L = losses([("A Re Ltd.", "a", "$100m", "Principal reduced by $40m; $15m returned to investors after subrogation.",
+    # 7. Principal "returned to investors" is the remainder repaid, not a
+    #    recovery (2026-11-17): the loss amount already nets it. Only a stated
+    #    reversal of a write-down is added back.
+    L = losses([("A Re Ltd.", "a", "$100m", "$40m paid out; $15m returned to investors after subrogation.",
                  "Jun 2021", "partial_loss", "40000000.0", "True")])
     b = rf.deal_book(d, L)
-    check((b.written_down_m.iat[0], b.recovered_m.iat[0], round(b.remainder_m.iat[0], 6)) == (40.0, 15.0, 75.0),
-          "UNIT roll-forward recovery added back", str((b.written_down_m.iat[0], b.recovered_m.iat[0], b.remainder_m.iat[0])))
-    check(stock(b, 2022) == 75.0 and stock(b, 2023) == 0.0, "UNIT roll-forward recovery in the stock", str((stock(b, 2022), stock(b, 2023))))
+    check((b.written_down_m.iat[0], b.recovered_m.iat[0], round(b.remainder_m.iat[0], 6)) == (40.0, 0.0, 60.0)
+          and "principal_returned_to_investors" in b['flags'].iat[0],
+          "UNIT roll-forward returned principal is not added back", str((b.written_down_m.iat[0], b.recovered_m.iat[0], b.remainder_m.iat[0], b['flags'].iat[0])))
+    check(stock(b, 2022) == 60.0 and stock(b, 2023) == 0.0, "UNIT roll-forward returned principal in the stock", str((stock(b, 2022), stock(b, 2023))))
+    L = losses([("A Re Ltd.", "a", "$100m", "Principal reduced by $40m; the write-down was reversed and $15m returned to investors.",
+                 "Jun 2021", "partial_loss", "40000000.0", "True")])
+    b = rf.deal_book(d, L)
+    check((b.written_down_m.iat[0], b.recovered_m.iat[0], round(b.remainder_m.iat[0], 6)) == (40.0, 15.0, 75.0)
+          and "recovery_to_investors" in b['flags'].iat[0],
+          "UNIT roll-forward a stated reversal is added back", str((b.written_down_m.iat[0], b.recovered_m.iat[0], b.remainder_m.iat[0])))
+    check(stock(b, 2022) == 75.0 and stock(b, 2023) == 0.0, "UNIT roll-forward reversal in the stock", str((stock(b, 2022), stock(b, 2023))))
 
     # 8. No maturity on the page: imputed term by class, flagged; a "cancelled"
     #    status does not remove the deal but is flagged.
@@ -1630,6 +1640,67 @@ def unit_maturity_recall_round3():
         check(_term_to_years(text) == years, f"UNIT term-to-years {text!r}", repr(_term_to_years(text)))
 
 
+def unit_parse_losses():
+    """The losses table's derived loss amount, on the cell phrasings the
+    2026-11-17 read found mis-derived or underived (synthetic table)."""
+    import parse_losses as pl
+
+    def table(rows):
+        body = "".join(
+            "<tr>" + "".join("<td>%s</td>" % c for c in r) + "</tr>" for r in rows)
+        return ("<html><body><table id='tablepress-2'><tr>" + "<th>h</th>" * 7
+                + "</tr>" + body + "</table></body></html>")
+
+    rows = [
+        ("Blue Halo Re Ltd. (Series 2016-1) Class B", "Allianz", "$55m", "Hurricanes",
+         "$47.87m reduction in principal", "Approx. 20 months", "2017"),
+        ("Frontline Re Ltd. (Series 2018-1) - Class A", "Frontline", "$250m", "Hurricanes",
+         "~$200m paid out. $25.5m+ returned to investors. Remaining $16.6m marked at around 30 to 40 cents on the dollar.", "Ongoing", "2018"),
+        ("Residential Reinsurance 2015 Limited (Series 2015-1) Class 11", "USAA", "$100m", "Hurricanes",
+         "Principal reduced to $19.55m (priced for a further 15% loss of principal)", "Ongoing", "2017"),
+        ("Residential Reinsurance 2016 Limited (Series 2016-1) Class 11", "USAA", "$75m", "Hurricanes",
+         "Principal reduced to ~$74.67m (priced for ~15% loss)", "Ongoing", "2017"),
+        ("Residential Reinsurance 2016 Limited (Series 2016-1) Class 10", "USAA", "$65m", "Hurricanes",
+         "Loss payments reduced by wildfire subrogation. ~$14m returned to investors, the rest recovered by sponsor under reinsurance.", "Roughly 34 months", "2017"),
+        ("Matterhorn Re Ltd. (Series 2020-2) - Class A", "Swiss Re", "$80m", "Hurricanes",
+         "Approx. $33m recovered by sponsor. Just over $46.9m of principal returned to investors.", "Ongoing", "2021"),
+        ("Residential Reinsurance 2019 Limited (Series 2019-1) - Class 12", "USAA", "$60m", "Hurricanes",
+         "50% of principal returned, leaving $30m extended. Mark to market implied ~20% loss of remaining principal.", "Ongoing", "2020"),
+        ("Sanders Re III Ltd. (Series 2022-2) - Class B", "Allstate", "$100m", "Hurricanes",
+         "Recovered to par", "Resolved", "2023"),
+        ("IBRD CAR Jamaica 2024", "Jamaica", "$150m", "Hurricane Melissa",
+         "100% loss of principal confirmed", "10 days", "October 2025"),
+        ("Some Re (Series 2020-1) Class A", "X", "$100m", "Hurricanes",
+         "$60m - 30% loss of principal", "Resolved", "2021"),
+    ]
+    df = pl.parse_losses(table(rows)).set_index("cat_bond")
+    got = {k: (df.loc[k, "loss_amount_derived"], df.loc[k, "loss_amount_basis"], df.loc[k, "loss_status"])
+           for k in df.index}
+    want = {
+        rows[0][0]: (47.87e6, "paid_out", "partial_loss"),
+        rows[1][0]: (200e6, "paid_out", "partial_loss"),
+        rows[2][0]: (80.45e6, "orig_minus_remaining", "partial_loss"),
+        rows[3][0]: (0.33e6, "orig_minus_remaining", "partial_loss"),
+        rows[4][0]: (51e6, "orig_minus_returned", "partial_loss"),
+        rows[5][0]: (33e6, "paid_out", "partial_loss"),
+        rows[6][0]: (None, None, "partial_loss"),
+        rows[7][0]: (None, None, "repaid_in_full"),
+        rows[8][0]: (150e6, "orig_minus_remaining", "total_loss"),
+        rows[9][0]: (60e6, "stated", "stated_amount"),
+    }
+    for k, (amt, basis, status) in want.items():
+        g_amt, g_basis, g_status = got[k]
+        ok = ((g_amt is None or (isinstance(g_amt, float) and g_amt != g_amt)) if amt is None
+              else (g_amt is not None and abs(float(g_amt) - amt) < 1.0))
+        check(ok and (g_basis == basis or (basis is None and (g_basis is None or g_basis != g_basis)))
+              and g_status == status,
+              f"UNIT losses derive {k[:40]!r}", f"want={(amt, basis, status)} got={got[k]}")
+    check(pl._pct_range("50% of principal returned, leaving $30m") == (None, None),
+          "UNIT losses '% of principal returned' is not a loss percent")
+    check(pl._remaining_principal("Principal reduced to ~$74.67m") == "$74.67m",
+          "UNIT losses remaining principal reads through a tilde")
+
+
 def unit_percent_parsing():
     """Pin decimal-comma percentages.
 
@@ -1677,6 +1748,7 @@ def main():
     unit_backward_reference()
     unit_maturity_class_scoped()
     unit_maturity_recall_round3()
+    unit_parse_losses()
     n_unit = len(results)
     if golden:
         unit_registry_rules()       # parses pages; reads data/queue.csv
@@ -1972,7 +2044,7 @@ def main():
     # checks when the separate-series-total rule was pinned (2026-10-21).
     # The tiers are pinned separately so unit checks can be added without
     # touching the golden pin, which has only ever been measured over raw/.
-    EXPECTED_UNIT_CHECKS = 328
+    EXPECTED_UNIT_CHECKS = 342
     EXPECTED_GOLDEN_CHECKS = 1965
     n_golden = len(results) - n_unit
     if n_unit != EXPECTED_UNIT_CHECKS:

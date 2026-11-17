@@ -3,6 +3,63 @@
 Read `PARSER_BACKLOG.md` first. It is the current state: what is parsed, what
 is validated, and everything still worth fixing, ordered by value per hour.
 
+## Checkpoint (2026-11-17, evening): the losses table's derived amounts
+
+The analysis repository's read of the fund-mark outliers named eight
+distressed deals as missing from `losses.csv`. Five of them are in the
+table, linked by name (Caelus Re V 2017-1 and 2018-1, Residential Re
+2015-1 and 2016-1, Blue Halo 2016-1); the roll-forward already wrote the
+Caelus rows down. The other three (FloodSmart Re 2021-1 and 2023-1, Mystic
+Re IV 2025-1) are in no table and their Artemis pages carry no loss,
+write-down or extension sentence at all, so the marks are the market's
+view and nothing on the page can be parsed for them. What the read did
+expose is in the DERIVED columns of `losses.csv` (`src/parse_losses.py`),
+fixed here. Tests 2293 -> **2307** (328 -> 342 unit; golden pin 1965).
+
+- "Principal reduced to $19.55m (priced for a further 15% loss of
+  principal)" (Residential Re 2015-1 Class 11) was read as a stated loss of
+  $19.55m by `AMOUNT_WITH_PCT_RE`; the figure is what is LEFT. Rows with a
+  "reduced to" amount are now `partial_loss` with `orig_minus_remaining`
+  before the amount-with-percent rule runs: 19.55 -> 80.45; Residential Re
+  2016-1 Class 11 "reduced to ~$74.67m" 74.67 -> 0.33 (the tilde had also
+  hidden the remaining principal from `_remaining_principal`).
+- Seven settled rows stated the amount that left without a "reduced to":
+  "$47.87m reduction in principal" (Blue Halo 2016-1 B), "$94.43m paid out"
+  (Citrus 2017-1 A), "~$200m paid out" and "$76.37m paid out" (Frontline
+  2018-1 A and B), "Approx. $33m recovered by sponsor" (Matterhorn 2020-2
+  A), "$3.2m recovered" (Sanders II 2020-1 B), "~$6m in loss payments made"
+  (Espada 2016-1), "$14.84m paid out to sponsor" (Manatee III 2019-1).
+  `PAID_OUT_RE` reads them (basis `paid_out`). With nothing else stated,
+  size less the amount "returned to investors" is the loss (Residential Re
+  2016-1 Class 10, $65m less $14m = $51m, basis `orig_minus_returned`).
+- "50% of principal returned, leaving $30m extended. Mark to market implied
+  ~20% loss" (Residential Re 2019-1 Class 12) was a 50% loss; the share
+  returned is not a loss, and an implied percentage is an estimate even in
+  a settled row. Now no derived amount (the $30m is an open extension).
+- `loss_amount_basis` column added (stated 47, orig_minus_remaining 25,
+  paid_out 8, percent 7, orig_minus_returned 1, none 26).
+- Roll-forward: principal "returned to investors" is no longer added back
+  as a recovery. It is the remainder repaid early, and every live row that
+  carries it already nets it in the loss amount (Frontline A: $200m paid
+  out beside $25.5m returned), so the add-back double-counted. Only a stated
+  reversal (`REVERSAL_RE`: "write-down reversed", "principal restored")
+  counts; the flag `principal_returned_to_investors` records the rest.
+  Documented in the module docstring.
+
+Settled realised loss in the table: $5.13bn -> $5.63bn (12 rows moved,
+listed above). Roll-forward, ex-mortgage ($m): written down 5,084 ->
+5,598, recovered 114 -> 0 (the 14 was Residential Re 2016-1's returned
+principal, the 100 Residential Re 2021-1's); outstanding minus publisher
+2017 -814 -> -1,014, 2018 -1,034 -> -1,510, 2019 +21 -> -347, 2020 +253 ->
+-24, 2021 -411 -> -706, 2022 +615 -> +612, 2023 -720 -> -757, 2024 +1,120
+-> +1,020, 2025 and 2026 unchanged; mean absolute gap 2010-2026 900 -> 959.
+The gap widens in 2017-2021 because the ledger removes a loss at the loss
+year (December when only a year is given) while the publisher's chart
+keeps extended, loss-affected principal outstanding until it is paid or
+redeemed, often years later (Frontline 2018-1's $276m is written down at
+2018-12 here). That is a timing convention, recorded in the backlog as the
+next thing to decide, not a reason to count less capital as lost.
+
 ## Checkpoint (2026-11-17, later still): maturity recall round three
 
 Backlog section 3's two open rules, plus the phrasings the audit-sample

@@ -3,7 +3,9 @@
     outstanding(t) = sum over deals of
         issued                      at the issue month
       - principal written down      at the loss month (losses.csv)
-      + principal recovered         where the table says it came back to investors
+      + principal recovered         where the table states a write-down reversal
+                                    (principal "returned to investors" is the
+                                    remainder repaid, not a recovery)
       - principal repaid            at the scheduled maturity, or later when the
                                     deal was extended, for what is still there
 
@@ -103,6 +105,8 @@ EXT_AMOUNT_RE = re.compile(
 RETURNED_RE = re.compile(
     r"\$([\d.,]+)\s*(m|million|bn|billion)?\s+(?:of principal\s+)?(?:(?:was |were )?(?:also )?returned to investors|repaid)",
     re.IGNORECASE)
+REVERSAL_RE = re.compile(r"write[- ]?down (?:was |has been )?(?:reversed|restored)|principal (?:was |has been )?(?:restored|reinstated)",
+                         re.IGNORECASE)
 FULL_RECOVERY_RE = re.compile(
     r"recovered to par|full recovery for investors|redeemed in full|no loss to this tranche",
     re.IGNORECASE)
@@ -373,9 +377,17 @@ def deal_book(deals, losses, as_of=AS_OF, term_months=IMPUTED_TERM_MONTHS,
                 last_loss[slug] = max(last_loss.get(slug, lm), lm)
             else:
                 fl.add("loss_undated_not_applied")
+        # Principal "returned to investors" is the part that did NOT leave:
+        # the remainder repaid early, not a reversal of a write-down. Adding
+        # it back (as this did until 2026-11-17) double-counted it wherever
+        # the loss amount already netted it (Frontline 2018-1 A: $200m paid
+        # out, $25.5m returned; Residential Re 2016-1 Class 10: loss = size
+        # less the $14m returned). Only a stated reversal is a recovery.
         ret = sum(_amount_m(a, u) or 0 for a, u in RETURNED_RE.findall(text))
         if ret and r.is_settled == "True" and lm:
-            rec.setdefault(slug, []).append((lm, ret)); fl.add("recovery_to_investors")
+            fl.add("principal_returned_to_investors")
+            if REVERSAL_RE.search(text):
+                rec.setdefault(slug, []).append((lm, ret)); fl.add("recovery_to_investors")
         if FULL_RECOVERY_RE.search(text):
             fl.add("repaid_in_full_no_loss")
         em = EXT_DATE_RE.search(text)

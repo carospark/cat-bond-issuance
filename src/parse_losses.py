@@ -73,6 +73,26 @@ AMOUNT_WITH_PCT_RE = re.compile(
 # zero. Counting these as no-loss would understate outflows.
 PLACEHOLDERS = {"?", "tbc", "tbc.", "n/a", "-", "unknown", ""}
 
+MONEY = r"(?:A|C|NZ|US|HK)?[$\u20ac\u00a3\u00a5][\d,.]+\s*(?:m|million|bn|billion)?"
+# An amount that LEFT: "$47.87m reduction in principal" (Blue Halo 2016-1),
+# "$94.43m paid out" (Citrus 2017-1), "~$200m paid out" (Frontline 2018-1),
+# "Approx. $33m recovered by sponsor" (Matterhorn 2020-2), "$3.2m recovered"
+# (Sanders II 2020-1), "~$6m in loss payments made" (Espada 2016-1),
+# "$14.84m paid out to sponsor" (Manatee III 2019-1). Read 2026-11-17: these
+# seven settled rows carried no derived amount, so the roll-forward wrote
+# nothing down for them.
+PAID_OUT_RE = re.compile(
+    r"(" + MONEY + r")\+?\s*(?:\(?[^.$]{0,30}?\)?\s*)?"
+    r"(?:reduction in principal|paid out|recovered by (?:the )?sponsor|recovered\b(?! to par)|"
+    r"in loss payments|of loss payments|loss payments made|of principal lost|loss of principal)",
+    re.IGNORECASE)
+# An amount that went BACK to investors; with nothing else stated, the loss is
+# the original size less this ("~$14m returned to investors, the rest
+# recovered by sponsor", Residential Re 2016-1 Class 10).
+RETURNED_TO_INVESTORS_RE = re.compile(
+    r"(" + MONEY + r")\+?\s*(?:of principal\s+)?(?:(?:was |were )?(?:also )?returned to investors|repaid)",
+    re.IGNORECASE)
+
 def _pct_range(text):
     """(low, high) percent loss. Ranges are common: "~80% to ~90% loss"."""
     m = re.search(r"~?\s*(\d+(?:[.,]\d+)?)\s*%\s*(?:to|-|\u2013)\s*~?\s*"
@@ -80,7 +100,10 @@ def _pct_range(text):
     if m:
         return (float(m.group(1).replace(",", ".")),
                 float(m.group(2).replace(",", ".")))
-    m = re.search(r"(\d+(?:[.,]\d+)?)\s*%\s*(?:loss|of principal)", text, re.IGNORECASE)
+    # "50% of principal returned" (Residential Re 2019-1 Class 12) is the
+    # share that came BACK, not the loss; it used to read as a 50% loss.
+    m = re.search(r"(\d+(?:[.,]\d+)?)\s*%\s*(?:loss|of principal(?!\s+(?:was |were )?(?:returned|repaid)))",
+                  text, re.IGNORECASE)
     if m:
         v = float(m.group(1).replace(",", "."))
         return (v, v)
@@ -93,8 +116,10 @@ def _remaining_principal(text):
     The distinction matters: the cell states what is LEFT, and the loss is the
     original size minus that. Reading it as the loss would invert the figure.
     """
-    m = re.search(r"reduced (?:down )?to\s*(\$[\d,.]+\s*(?:m|million|bn|billion)?)",
-                  text, re.IGNORECASE)
+    # "~$74.67m" / "approx. $20m": the tilde or word is the source's hedge on
+    # the figure, not a different figure.
+    m = re.search(r"reduced (?:down )?to\s*(?:~|approx\.?|approximately|around|about)?\s*"
+                  r"(\$[\d,.]+\s*(?:m|million|bn|billion)?)", text, re.IGNORECASE)
     if m:
         return _clean(m.group(1))
     if re.search(r"reduced to zero|100%\s*loss|full loss of principal", text, re.IGNORECASE):
@@ -132,6 +157,14 @@ def parse_losses(html):
             status = None                      # the source is silent, not zero
         elif BARE_AMOUNT_RE.match(loss.strip()):
             status, cue = "stated_amount", loss.strip()
+        elif _remaining_principal(loss) is not None and not re.search(
+                r"reduced to zero|100%\s*loss|full loss of principal", loss, re.IGNORECASE):
+            # "Principal reduced to $19.55m (priced for a further 15% loss of
+            # principal)" (Residential Re 2015-1 Class 11): the amount beside
+            # the percentage is what is LEFT. Read as a stated amount, the
+            # roll-forward wrote down $19.55m instead of $80.45m, and
+            # Residential Re 2016-1 Class 11's "$74.67m" instead of $0.33m.
+            status, cue = "partial_loss", "reduced to"
         elif AMOUNT_WITH_PCT_RE.search(loss):
             status = "stated_amount"
             cue = AMOUNT_WITH_PCT_RE.search(loss).group(0)[:40]
@@ -157,12 +190,29 @@ def parse_losses(html):
 
         orig = _money_to_number(row["orig_size"])
         rem = _money_to_number(row["principal_remaining"] or "")
+        paid = PAID_OUT_RE.search(loss)
+        returned = RETURNED_TO_INVESTORS_RE.search(loss)
+        row["loss_amount_basis"] = None
         if status == "stated_amount":
             row["loss_amount_derived"] = _money_to_number(loss)
+            row["loss_amount_basis"] = "stated"
         elif orig is not None and rem is not None:
             row["loss_amount_derived"] = orig - rem
-        elif orig is not None and lo is not None and lo == hi:
+            row["loss_amount_basis"] = "orig_minus_remaining"
+        elif paid and _money_to_number(paid.group(1)) is not None and status == "partial_loss":
+            row["loss_amount_derived"] = _money_to_number(paid.group(1))
+            row["loss_amount_basis"] = "paid_out"
+        elif (orig is not None and lo is not None and lo == hi
+              and not re.search(r"implied|potential|priced for|marked? (?:to|for|down)", loss, re.IGNORECASE)):
+            # A percentage the market IMPLIES ("Mark to market implied ~20%
+            # loss of remaining principal", Residential Re 2019-1 Class 12)
+            # is an estimate even inside a row whose status is settled.
             row["loss_amount_derived"] = orig * lo / 100.0
+            row["loss_amount_basis"] = "percent"
+        elif (returned and orig is not None and status == "partial_loss"
+              and _money_to_number(returned.group(1)) is not None):
+            row["loss_amount_derived"] = max(orig - _money_to_number(returned.group(1)), 0.0)
+            row["loss_amount_basis"] = "orig_minus_returned"
         else:
             row["loss_amount_derived"] = None
 

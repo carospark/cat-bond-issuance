@@ -137,6 +137,22 @@ CLASS's term on a multi-class page. Result: 354 stated maturities,
 
 ## 4. Lifecycle extractor breadth — measured 2026-09-15, still thin
 
+2026-11-17: `losses.csv` derived amounts re-read (HANDOFF "the losses
+table's derived amounts"): 12 rows corrected, $5.13bn -> $5.63bn settled.
+Open from that read: (a) loss TIMING -- the ledger writes a loss down at
+the loss month (December when the table gives a year) while the publisher's
+outstanding chart keeps extended principal until it is paid or redeemed;
+a `--loss-timing settlement` option using `time_to_resolution` and the
+extension dates would let the two be compared like for like (the
+2017-2021 gaps of -0.3 to -1.5bn are this); (b) "Loss payments reduced by
+wildfire subrogation" (Residential Re 2015-1 Class 10) has no amount in
+the table but the page says "reduced by almost half to $26,511,039", the
+one case where the page beats the table; (c) FloodSmart Re 2021-1 and
+2023-1 and Mystic Re IV 2025-1 carry distressed fund marks with no loss
+text on their pages and no table row: nothing to parse, the marks are the
+market's view.
+
+
 `src/crosscheck_losses.py` now runs the cross-check the note below asked for
 and writes `data/validation_dashboards/losses_crosscheck.csv`: the losses
 table's 40 settled rows against the page-side `principal_loss_pct`. Result:
