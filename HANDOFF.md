@@ -60,6 +60,14 @@ redeemed, often years later (Frontline 2018-1's $276m is written down at
 2018-12 here). That is a timing convention, recorded in the backlog as the
 next thing to decide, not a reason to count less capital as lost.
 
+`validate_annual_deal_counts.py` rerun the same evening (the dashboard was
+fetched live): directory 1,311 deals, dashboard 1,236 ex-mortgage, scope
+gap 77, 13 of 31 years exact, and one FAIL_MISSING: 2026 shows 94 in the
+directory against 96 on the dashboard. The index was crawled 2026-08-29
+and the dashboard is today's, so the two are deals listed since the
+crawl; a re-crawl of the index is the fix, not the parser. The output is
+local (`data/annual_deal_count_validation.csv`, gitignored).
+
 ## Checkpoint (2026-11-17, later still): maturity recall round three
 
 Backlog section 3's two open rules, plus the phrasings the audit-sample
