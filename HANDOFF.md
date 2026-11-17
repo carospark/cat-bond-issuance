@@ -5,9 +5,14 @@ is validated, and everything still worth fixing, ordered by value per hour.
 
 ## Checkpoint (2026-11-17): TRACE maturities in the roll-forward; the cancelled-status false positive closed
 
-Two items from the 2026-10-25 "left open" list. Tests 2227 -> **2255**
-(262 -> 290 unit; the golden pin is unchanged at 1965). Both repositories
-now live under `~/projects/`.
+Two items from the 2026-10-25 "left open" list. Tests 2227 -> **2256**
+(262 -> 291 unit; the golden pin is unchanged at 1965). Both repositories
+now live under `~/projects/`. Two commits: the first carried a symmetric
+stated-vs-TRACE rule and the bridge as it stood that morning; the second
+(same day) made the rule one-sided and re-ran on the bridge after the
+analysis side moved CUSIP 577092AR0 (TRACE maturity 2027-01-25) from
+Matterhorn Re 2022-1 to Matterhorn Re Argon 2022-1. The numbers below are
+the second run's.
 
 ### TRACE maturities as a maturity tier (`src/roll_forward.py`)
 
@@ -31,14 +36,18 @@ page's own maturity kept beside it (`page_maturity_month`,
 - stated on the page: kept when TRACE is within 3 months
   (`trace_corroborates_stated=+Nm`; 176 deals, $43.6bn: 96 at +0, 80 at +1,
   so the page's month is the risk-period end and the legal final sits a
-  month later in 45% of them); replaced by TRACE beyond that
-  (`trace_maturity_overrides_stated=+Nm`, 7 deals, $1.3bn: Sanders III
-  2022-3 +48m, ResRe 2023-2 +37m, Casablanca 2020-1 +25m, Bonanza 2023-1
-  +24m, Vita IV +12m, Queen Street X 2015 +6m, all of them a one-year class
-  or a predecessor's date read as the deal's, and Kilimanjaro II 2024-1 at
-  -35m, where the bridge holds only the two 2025 classes of a page that
-  states July 2028 -- the one override worth reading) or when the page date
-  was a per-class vote (`_class_vote`; Montana Re 2010-1, same month).
+  month later in 45% of them); replaced by TRACE only when TRACE is LATER
+  than the page by more than that (`trace_maturity_overrides_stated=+Nm`,
+  6 deals, $1.1bn: Sanders III 2022-3 +48m, ResRe 2023-2 +37m, Casablanca
+  2020-1 +25m, Bonanza 2023-1 +24m, Vita IV +12m, Queen Street X 2015 +6m,
+  every one a one-year class's or a predecessor's date read as the deal's)
+  or when the page date was a per-class vote (`_class_vote`; Montana Re
+  2010-1, same month). A page date later than TRACE stands and is flagged
+  (`page_later_than_trace=+Nm`; 1 deal, Kilimanjaro II 2024-1 +35m: the
+  bridge holds only the two 2025 classes of a page that states July 2028,
+  and a deal matures with its longest class). The asymmetry is the rule,
+  not a patch: the bridge can miss a deal's long classes, it cannot invent
+  a later one.
 - derived from a stated term: TRACE replaces it
   (`trace_maturity_replaces_derived=+Nm`; 189 deals, $52.4bn; 63 at +0, 84
   at +1, 10 at +2, 6 at -1; 23 beyond 3 months, the largest being page
@@ -49,8 +58,10 @@ page's own maturity kept beside it (`page_maturity_month`,
   2020-2 +36m; the two-month cases are in `data/validation_dashboards/trace_maturities.csv`
   as aggregates).
 - nothing on the page: TRACE replaces the imputed term
-  (`trace_maturity_replaces_imputed`; 317 deals, 310 public $76.6bn and 7
-  private $1.1bn). What the imputation had been getting wrong: the public
+  (`trace_maturity_replaces_imputed`; 318 deals, 310 public $76.6bn and 8
+  private $1.3bn, Matterhorn Re Argon 2022-1 among them since the bridge
+  fix: imputed 2023-04 -> TRACE 2027-01; Matterhorn Re 2022-1 keeps
+  2025-03). What the imputation had been getting wrong: the public
   terms TRACE gives are 36 or 37 months for 141 of the 310, longer than 42
   for 96 ($27.6bn, the four- and five-year deals the 2026-10-25 note
   expected), shorter than 30 for 40 ($7.0bn); size-weighted mean 40.6
@@ -60,23 +71,27 @@ page's own maturity kept beside it (`page_maturity_month`,
   is imputed as before.
 
 Coverage of the maturity leg by issued dollars, ex-mortgage, before ->
-after: stated 26.1% -> 25.6%, derived from term 26.7% -> 4.0%, TRACE 0 ->
-58.7% (514 deals, $131.7bn), imputed public 43.7% -> 8.7% (450 -> 136
+after: stated 26.1% -> 25.7%, derived from term 26.7% -> 4.0%, TRACE 0 ->
+58.7% (514 deals, $131.6bn), imputed public 43.7% -> 8.7% (450 -> 136
 deals, $97.9bn -> $19.4bn), imputed private 3.5% -> 3.0%. Known from a page
-or TRACE: 52.8% -> 88.3%.
+or TRACE: 52.8% -> 88.4%.
 
 Outstanding vs the publisher ($m, ex-mortgage; roll-forward of 2026-10-25 ->
 with TRACE): 2010 -2,076 -> -455; 2011 -1,253 -> -202; 2012 -857 -> -372;
 2013 -1,523 -> -1,203; 2014 -1,764 -> -549; 2015 -970 -> +908; 2016
 -2,263 -> +452; 2017 -3,259 -> -889; 2018 -2,114 -> -1,109; 2019 -1,594
 -> +21; 2020 -4,678 -> +253; 2021 -3,291 -> -411; 2022 -2,468 -> +615;
-2023 -3,805 -> -770; 2024 -2,181 -> +829; 2025 +724 -> +2,024; 2026 (at
-2026-08) +4,121 -> +4,441. Mean absolute gap 2010-2026: 2,291 -> 912. The
+2023 -3,805 -> -620; 2024 -2,181 -> +979; 2025 +724 -> +2,374; 2026 (at
+2026-08) +4,121 -> +4,791. Mean absolute gap 2010-2026: 2,291 -> 954. (The
+first commit's run had -770 / +829 / +2,024 / +4,441 for 2023-2026; the
+one-sided rule holds Kilimanjaro II's $200m to 2028-07 and the bridge fix
+holds Argon's $150m to 2027-01, +150 in 2023-2024 and +350 in 2025-2026.)
+The
 2020-2024 shortfall the 2026-10-25 note attributed to 36-month imputation
 of 48-to-60-month cohorts is gone; what is left is 2025-2026 running high,
 and the upcoming-maturities check says where: against the publisher's
-chart (Q3 2026 to Q2 2030) our scheduled remainder is now 65,401 vs 62,372
-(was 67,041), mean absolute quarterly difference 671 (was 1,621), Q4 2026
+chart (Q3 2026 to Q2 2030) our scheduled remainder is now 65,751 vs 62,372
+(was 67,041), mean absolute quarterly difference 649 (was 1,621), Q4 2026
 +891 (was +2,626), and the largest remaining quarter is Q2 2027 at +2,228
 (was +1,733) with Q3 2029 at -1,435. Those are TRACE legal finals, so the
 residual is either the publisher retiring notes at the risk-period end
@@ -129,16 +144,17 @@ with this rebuild. Not a change in this commit's code.
 - Tests: 9 `deal-cancelled` unit checks on the five false-positive
   sentences, the two true positives and two synthetic edges; 19 TRACE
   checks (the deal-level rule, tie, blank dates, path resolution, each
-  precedence outcome, the rejection, the no-`deal_url` case, the page
-  columns, the legacy fallback on both an imputed and a replaced stated
-  deal, coverage, the check table). Mutations, each run through the whole
-  suite: tranche veto off (2 fail), earlier-attempt veto off (1), sibling
-  veto off (2), tolerance 0 (3), tie to the earliest month (1), derived not
-  replaced (2), legacy variant reading TRACE instead of the page (1 after
-  the stated-replaced pin was added; 0 before it, which is why it was).
+  precedence outcome including the page-later case, the rejection, the
+  no-`deal_url` case, the page columns, the legacy fallback on both an
+  imputed and a replaced stated deal, coverage, the check table).
+  Mutations, each run through the whole suite: tranche veto off (2 fail),
+  earlier-attempt veto off (1), sibling veto off (2), tolerance 0 (3), tie
+  to the earliest month (1), derived not replaced (2), legacy variant
+  reading TRACE instead of the page (1 after the stated-replaced pin was
+  added; 0 before it, which is why it was), stated rule made symmetric
+  again (3).
 
-Left for Caro: read Kilimanjaro II 2024-1's page against the bridge (page
-July 2028, TRACE 2025-07/08 on two CUSIPs); decide whether the 55
+Left for Caro: decide whether the 55
 multi-term deals should be split by class size once the bridge carries
 class labels; `validate_annual_deal_counts.py` was not rerun (its
 cumulative-issuance dashboard is not in the cache and the run was offline;

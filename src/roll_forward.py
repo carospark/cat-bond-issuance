@@ -19,9 +19,14 @@ reported by issued dollars.
 Maturity precedence, per deal (`maturity_source`):
 
     stated      the page states a maturity; kept when TRACE agrees within
-                TRACE_TOLERANCE_MONTHS (flag trace_corroborates_stated=+Nm),
-                replaced by TRACE beyond that (trace_maturity_overrides_stated)
-                or when the page date was a per-class vote
+                TRACE_TOLERANCE_MONTHS (flag trace_corroborates_stated=+Nm);
+                replaced by TRACE only when TRACE is LATER than the page by
+                more than that (trace_maturity_overrides_stated=+Nm: the page
+                gave a one-year class's or a predecessor's date) or when the
+                page date was a per-class vote; a page date later than TRACE
+                stands and is flagged page_later_than_trace=+Nm, since the
+                bridge may hold only a deal's short classes while the page
+                names its longest
     trace       the TRACE maturity of the deal's bridged CUSIPs: the month
                 shared by most of them, the latest on a tie; replaces a
                 term-derived or imputed page maturity, flagged with the
@@ -306,9 +311,17 @@ def deal_book(deals, losses, as_of=AS_OF, term_months=IMPUTED_TERM_MONTHS,
             if m:
                 diff = month_index(tm) - month_index(m)
             if s == "stated":
-                if abs(diff) <= trace_tolerance and not class_vote.iat[i]:
+                if diff < -trace_tolerance:
+                    # The page names a later month than every bridged CUSIP:
+                    # the bridge holds the short classes only (Kilimanjaro II
+                    # 2024-1: two 2025 classes bridged, page July 2028). The
+                    # deal matures with its longest class; the page stands.
+                    f.append("page_later_than_trace=%+dm" % -diff)
+                elif abs(diff) <= trace_tolerance and not class_vote.iat[i]:
                     f.append("trace_corroborates_stated=%+dm" % diff)
                 else:
+                    # TRACE later than the page by more than the tolerance:
+                    # the page's date was a one-year class's or a predecessor's.
                     f.append("trace_maturity_overrides_stated=%+dm%s" % (diff, "_class_vote" if class_vote.iat[i] else ""))
                     m, s = tm, "trace"
             elif s == "derived_from_term":
@@ -603,6 +616,8 @@ def trace_check(book):
         fl = r.flags or ""
         if "trace_corroborates_stated" in fl:
             outcome = "stated_kept"
+        elif "page_later_than_trace" in fl:
+            outcome = "stated_kept_page_later"
         elif "trace_maturity_overrides_stated" in fl:
             outcome = "trace_overrides_stated" + ("_class_vote" if "_class_vote" in fl else "")
         elif "trace_maturity_replaces_derived" in fl:

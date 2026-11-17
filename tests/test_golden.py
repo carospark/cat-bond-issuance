@@ -1149,6 +1149,7 @@ def unit_trace_maturities():
         ("https://x/d/", "D1", "2023-07-07"),
         ("https://x/s2/", "S2", "2025-06-07"), ("https://x/s3/", "S3", "2023-06-07"),
         ("https://x/s4/", "S4", "2023-07-07"), ("https://x/s6/", "S6", "2020-06-07"),
+        ("https://x/s8/", "S8", "2025-08-08"),
     ], columns=["deal_url", "cusip_id", "trace_maturity_date"])
     with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as fh:
         bridge.to_csv(fh.name, index=False)
@@ -1179,6 +1180,7 @@ def unit_trace_maturities():
         ("s5", "https://x/a/", "S5 Re", "$100m", "Jun 2020", "", "", "", "", "", "issued"),
         ("s6", "https://x/s6/", "S6 Re", "$100m", "Jun 2020", "", "", "", "", "", "issued"),
         ("s7", "https://x/none/", "S7 Re", "$100m", "Jun 2020", "", "", "", "", "", "issued"),
+        ("s8", "https://x/s8/", "S8 Re", "$100m", "Jun 2024", "July 2028", "", "", "Jul 2028", "", "issued"),
     ]
     d = pd.DataFrame([dict(zip(cols, r)) for r in rows], columns=cols, dtype=str).fillna("")
     L = pd.DataFrame(columns=["cat_bond", "deal_slug", "orig_size", "loss_amount", "date_of_loss",
@@ -1191,6 +1193,9 @@ def unit_trace_maturities():
     check(b.loc["s2"].maturity_source == "trace" and b.loc["s2"].maturity_month == "2025-06"
           and "trace_maturity_overrides_stated=+24m" in b.loc["s2"]["flags"],
           "UNIT trace tier: stated beyond tolerance replaced by TRACE", b.loc["s2"]["flags"])
+    check(b.loc["s8"].maturity_source == "stated" and b.loc["s8"].maturity_month == "2028-07"
+          and "page_later_than_trace=+35m" in b.loc["s8"]["flags"] and "overrides" not in b.loc["s8"]["flags"],
+          "UNIT trace tier: a page date later than TRACE stands (bridge may hold short classes only)", b.loc["s8"]["flags"])
     check(b.loc["s3"].maturity_source == "trace" and "trace_maturity_overrides_stated=+0m_class_vote" in b.loc["s3"]["flags"],
           "UNIT trace tier: a per-class vote yields to TRACE", b.loc["s3"]["flags"])
     check(b.loc["s4"].maturity_source == "trace" and b.loc["s4"].maturity_month == "2023-07"
@@ -1225,12 +1230,14 @@ def unit_trace_maturities():
           "UNIT trace tier: legacy_3y keeps the page's stated month where TRACE replaced it", v2.to_string())
     cov = rf.coverage(bb)
     check(abs(cov.share_pct.sum() - 100) < 1e-9 and "trace" in set(cov.maturity_source)
-          and float(cov.set_index("maturity_source").loc["trace"].n_deals) == 4,
+          and float(cov.set_index("maturity_source").loc["trace"].n_deals) == 4
+          and float(cov.set_index("maturity_source").loc["stated"].n_deals) == 2,
           "UNIT trace tier: coverage counts the TRACE tier", cov.to_string())
     tc = rf.trace_check(bb)
     got = tc.groupby("outcome").n_deals.sum().to_dict()
-    check(got == {"stated_kept": 1, "trace_overrides_stated": 1, "trace_overrides_stated_class_vote": 1,
-                  "trace_replaces_derived": 1, "trace_replaces_imputed": 1, "trace_rejected": 1},
+    check(got == {"stated_kept": 1, "stated_kept_page_later": 1, "trace_overrides_stated": 1,
+                  "trace_overrides_stated_class_vote": 1, "trace_replaces_derived": 1,
+                  "trace_replaces_imputed": 1, "trace_rejected": 1},
           "UNIT trace tier: check table outcomes", str(got))
     os.unlink(path)
 
@@ -1832,7 +1839,7 @@ def main():
     # checks when the separate-series-total rule was pinned (2026-10-21).
     # The tiers are pinned separately so unit checks can be added without
     # touching the golden pin, which has only ever been measured over raw/.
-    EXPECTED_UNIT_CHECKS = 290
+    EXPECTED_UNIT_CHECKS = 291
     EXPECTED_GOLDEN_CHECKS = 1965
     n_golden = len(results) - n_unit
     if n_unit != EXPECTED_UNIT_CHECKS:

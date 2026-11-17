@@ -20,10 +20,10 @@ derived_from_term,trace_replaces_derived,24.0,1,355.0
 derived_from_term,trace_replaces_derived,25.0,4,1645.0
 derived_from_term,trace_replaces_derived,36.0,1,295.0
 derived_from_term,trace_replaces_derived,37.0,1,400.0
-none,trace_replaces_imputed,,317,77701.0
+none,trace_replaces_imputed,,318,77851.0
 stated,stated_kept,0.0,96,25731.0
 stated,stated_kept,1.0,80,17844.5
-stated,trace_overrides_stated,-35.0,1,200.0
+stated,stated_kept_page_later,-35.0,1,200.0
 stated,trace_overrides_stated,6.0,1,100.0
 stated,trace_overrides_stated,12.0,1,300.0
 stated,trace_overrides_stated,24.0,1,135.0
