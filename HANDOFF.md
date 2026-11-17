@@ -3,6 +3,147 @@
 Read `PARSER_BACKLOG.md` first. It is the current state: what is parsed, what
 is validated, and everything still worth fixing, ordered by value per hour.
 
+## Checkpoint (2026-11-17): TRACE maturities in the roll-forward; the cancelled-status false positive closed
+
+Two items from the 2026-10-25 "left open" list. Tests 2227 -> **2255**
+(262 -> 290 unit; the golden pin is unchanged at 1965). Both repositories
+now live under `~/projects/`.
+
+### TRACE maturities as a maturity tier (`src/roll_forward.py`)
+
+The companion repository's strict bridge (`data/bridge.csv`, one row per
+Artemis deal x TRACE CUSIP, 1,196 rows, 700 deals) carries the legal final
+maturity of every bridged CUSIP. `load_trace_maturities` reduces it to one
+month per deal: the month shared by the most of the deal's CUSIPs, the
+latest on a tie. 645 deals have one month; 55 do not (Residential Re's
+one-year and four-year classes and the like; span 1 to 49 months, median
+24), and those carry `trace_maturity_tranches_disagree=<span>m`. The bridge
+is read with `--trace-maturities PATH`, default the sibling checkout's
+`data/bridge.csv` when it exists; `--no-trace-maturities` reproduces the
+2026-10-25 output leaf for leaf (checked by diff). `net_supply.py` passes
+the same options through. The parser runs without the analysis repository.
+
+Precedence per deal, recorded in `maturity_source` and the flags, with the
+page's own maturity kept beside it (`page_maturity_month`,
+`page_maturity_source`, `trace_maturity_month`, `trace_vs_page_months` in
+`data/outstanding_deals.csv`):
+
+- stated on the page: kept when TRACE is within 3 months
+  (`trace_corroborates_stated=+Nm`; 176 deals, $43.6bn: 96 at +0, 80 at +1,
+  so the page's month is the risk-period end and the legal final sits a
+  month later in 45% of them); replaced by TRACE beyond that
+  (`trace_maturity_overrides_stated=+Nm`, 7 deals, $1.3bn: Sanders III
+  2022-3 +48m, ResRe 2023-2 +37m, Casablanca 2020-1 +25m, Bonanza 2023-1
+  +24m, Vita IV +12m, Queen Street X 2015 +6m, all of them a one-year class
+  or a predecessor's date read as the deal's, and Kilimanjaro II 2024-1 at
+  -35m, where the bridge holds only the two 2025 classes of a page that
+  states July 2028 -- the one override worth reading) or when the page date
+  was a per-class vote (`_class_vote`; Montana Re 2010-1, same month).
+- derived from a stated term: TRACE replaces it
+  (`trace_maturity_replaces_derived=+Nm`; 189 deals, $52.4bn; 63 at +0, 84
+  at +1, 10 at +2, 6 at -1; 23 beyond 3 months, the largest being page
+  terms read off another sentence -- Fidus 2021-1 "twelve-year" -121m, Ursa
+  II 2021-1 "nine month" -63m, Matterhorn 2022-2 "6 month" -48m, Gateway
+  2023-1 and Alamo 2021-1 "one-year" +24m/+25m -- and multi-term series
+  where the majority class is the long one, ResRe 2016-2 +37m, Bonanza
+  2020-2 +36m; the two-month cases are in `data/validation_dashboards/trace_maturities.csv`
+  as aggregates).
+- nothing on the page: TRACE replaces the imputed term
+  (`trace_maturity_replaces_imputed`; 317 deals, 310 public $76.6bn and 7
+  private $1.1bn). What the imputation had been getting wrong: the public
+  terms TRACE gives are 36 or 37 months for 141 of the 310, longer than 42
+  for 96 ($27.6bn, the four- and five-year deals the 2026-10-25 note
+  expected), shorter than 30 for 40 ($7.0bn); size-weighted mean 40.6
+  months against the flat 36.
+- a TRACE month at or before the issue month is rejected
+  (`trace_maturity_rejected_not_after_issue`, 0 deals today) and the deal
+  is imputed as before.
+
+Coverage of the maturity leg by issued dollars, ex-mortgage, before ->
+after: stated 26.1% -> 25.6%, derived from term 26.7% -> 4.0%, TRACE 0 ->
+58.7% (514 deals, $131.7bn), imputed public 43.7% -> 8.7% (450 -> 136
+deals, $97.9bn -> $19.4bn), imputed private 3.5% -> 3.0%. Known from a page
+or TRACE: 52.8% -> 88.3%.
+
+Outstanding vs the publisher ($m, ex-mortgage; roll-forward of 2026-10-25 ->
+with TRACE): 2010 -2,076 -> -455; 2011 -1,253 -> -202; 2012 -857 -> -372;
+2013 -1,523 -> -1,203; 2014 -1,764 -> -549; 2015 -970 -> +908; 2016
+-2,263 -> +452; 2017 -3,259 -> -889; 2018 -2,114 -> -1,109; 2019 -1,594
+-> +21; 2020 -4,678 -> +253; 2021 -3,291 -> -411; 2022 -2,468 -> +615;
+2023 -3,805 -> -770; 2024 -2,181 -> +829; 2025 +724 -> +2,024; 2026 (at
+2026-08) +4,121 -> +4,441. Mean absolute gap 2010-2026: 2,291 -> 912. The
+2020-2024 shortfall the 2026-10-25 note attributed to 36-month imputation
+of 48-to-60-month cohorts is gone; what is left is 2025-2026 running high,
+and the upcoming-maturities check says where: against the publisher's
+chart (Q3 2026 to Q2 2030) our scheduled remainder is now 65,401 vs 62,372
+(was 67,041), mean absolute quarterly difference 671 (was 1,621), Q4 2026
++891 (was +2,626), and the largest remaining quarter is Q2 2027 at +2,228
+(was +1,733) with Q3 2029 at -1,435. Those are TRACE legal finals, so the
+residual is either the publisher retiring notes at the risk-period end
+rather than the legal final, or deals the publisher's chart does not
+carry; `data/validation_dashboards/maturities.csv` has the quarters.
+`legacy_3y` in `outstanding.csv` still reproduces the old rule from the
+page alone (TRACE did not exist for it), so `double_subtraction_m` keeps
+its meaning; `no_netting` and `netted` use this book's maturities.
+
+Convention, not fact: a deal with a one-year and a four-year class is held
+in full to the majority class's month. Tranche sizes are in `tranches.csv`
+but the bridge does not say which CUSIP is which class, so the split is not
+done; 55 deals, flagged.
+
+### `deal_status = cancelled` (`src/parse_deal.py`)
+
+All five "cancelled" statuses were false positives and each was one of
+three vetoes the size reader already applied elsewhere. `_deal_cancelled`
+now takes a `CANCELLED_RE` hit as a deal fact only when the sentence is
+not tranche-scoped (a class label, or "tranche(s)" unless "all/both/every
+tranches" or "the entire deal"), not a sibling or predecessor reference
+(`_is_backward_reference`: "The Series 2024-2 notes ... withdrawn" on the
+Everglades Re II 2024-1 page; "that issuance was cancelled ... UnipolSai's
+2022 cat bond" on Azzurro Re II 2024-1), and not an earlier attempt ("a deal
+that was not completed earlier this year", Titania Re 2024-1, which
+completed in November). Atlas IX 2013-1 ("one tranche of notes has been
+pulled completely") and Tradewynd 2013-2 ("One of the four tranches ...
+withdrawn") are the tranche cases. Gateway 2024-3 ("this Gateway Re 2024-3
+... issuance has been cancelled") and Queen Street X ("was not completed";
+Tier-1 "Not issued") still read as terminal.
+
+Effect on the tables (`build_review_bundle.py`, offline): exactly the five
+deals change `deal_status` to `issued` (1,300 issued, 11 not_issued, 0
+cancelled); four of them regain the derived and scheduled maturity the
+status had blanked (Everglades May 2027, Tradewynd Dec 2014, Azzurro April
+2028, Titania November 2027; Atlas IX states none); Azzurro's single
+tranche gets its `final_from_tier1` size and its sum check goes n/a -> OK.
+`validation.csv` is unchanged (272 findings). Issuance vs the publisher
+does not move: the sums come from `index.csv` and always included the
+five. The roll-forward's `deal_status_cancelled_ignored` flag count goes
+5 -> 0; its stock did not move, since TRACE covers those deals.
+
+Also found while rebuilding: the tables on disk predated the 2026-10-21
+separate-series-totals rule for the Merna Re II 2022-2/2022-3/2024-1,
+Merna 2025-1 to 2025-4 and Seaside 2017-1 pages (HEAD's parser gives the
+new values, checked against the committed `parse_deal.py`), so
+`size_change.csv` Q2 2022 moves from 12 deals at mean 19.3% to 10 at 33.2%
+with this rebuild. Not a change in this commit's code.
+
+- Tests: 9 `deal-cancelled` unit checks on the five false-positive
+  sentences, the two true positives and two synthetic edges; 19 TRACE
+  checks (the deal-level rule, tie, blank dates, path resolution, each
+  precedence outcome, the rejection, the no-`deal_url` case, the page
+  columns, the legacy fallback on both an imputed and a replaced stated
+  deal, coverage, the check table). Mutations, each run through the whole
+  suite: tranche veto off (2 fail), earlier-attempt veto off (1), sibling
+  veto off (2), tolerance 0 (3), tie to the earliest month (1), derived not
+  replaced (2), legacy variant reading TRACE instead of the page (1 after
+  the stated-replaced pin was added; 0 before it, which is why it was).
+
+Left for Caro: read Kilimanjaro II 2024-1's page against the bridge (page
+July 2028, TRACE 2025-07/08 on two CUSIPs); decide whether the 55
+multi-term deals should be split by class size once the bridge carries
+class labels; `validate_annual_deal_counts.py` was not rerun (its
+cumulative-issuance dashboard is not in the cache and the run was offline;
+it does not read `deal_status`).
+
 ## Checkpoint (2026-10-25, later): outstanding principal as a deal-level roll-forward
 
 `src/roll_forward.py` replaces the approximation in `net_supply.py` (issue +

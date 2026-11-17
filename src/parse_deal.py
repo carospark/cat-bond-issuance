@@ -365,6 +365,48 @@ TRANCHE_DROPPED_RE = re.compile(
     r"not (?:be )?issued|cancelled|shelved)\b|"
     r"\b(?:dropped|pulled|withdrawn|removed|cancelled)\b[^.]{0,60}?(?:class|tranche)",
     re.IGNORECASE)
+# A cancellation cue is a DEAL fact only when the sentence is about this deal
+# as a whole. All five "cancelled" statuses in the 2026-10-25 tables were
+# something else, and each is one of three vetoes the size reader already
+# applies:
+#   tranche-scoped   "one tranche of notes has been pulled completely" (Atlas
+#                    IX 2013-1), "One of the four tranches of notes has been
+#                    withdrawn" (Tradewynd 2013-2) -- a sentence naming a
+#                    tranche or class, unless it says every tranche went;
+#   sibling or predecessor   "The Series 2024-2 notes ... have been withdrawn"
+#                    on the 2024-1 page (Everglades Re II), "that issuance was
+#                    cancelled ... UnipolSai's 2022 cat bond" (Azzurro Re II
+#                    2024-1) -- _is_backward_reference;
+#   earlier attempt  "a deal that was not completed earlier this year" on the
+#                    page of the deal that DID complete in November (Titania
+#                    Re 2024-1).
+# The publisher's issuance totals for 2013 and 2024 include all five.
+TRANCHE_NOUN_RE = re.compile(r"\btranches?\b", re.IGNORECASE)
+ALL_TRANCHES_RE = re.compile(
+    r"\b(?:all|both|every|each)\b[^.]{0,20}?\btranches?\b|"
+    r"\b(?:entire|whole) (?:deal|issuance|transaction|offering)\b", re.IGNORECASE)
+EARLIER_ATTEMPT_RE = re.compile(
+    r"\b(?:earlier|previous|prior)\s+(?:this\s+|that\s+|last\s+|in the\s+)?"
+    r"(?:year|attempt|issuance|deal|transaction|effort)\b", re.IGNORECASE)
+
+
+def _deal_cancelled(prose, issue_year=None, own_series=frozenset()):
+    """True when a sentence says THIS deal was cancelled, withdrawn or not
+    completed: a CANCELLED_RE hit that is not tranche-scoped, not about a
+    sibling series or an earlier deal, and not about an earlier attempt."""
+    for sent in sentences(prose or ""):
+        if not CANCELLED_RE.search(sent):
+            continue
+        if CLASS_SCOPED_RE.search(sent):
+            continue
+        if TRANCHE_NOUN_RE.search(sent) and not ALL_TRANCHES_RE.search(sent):
+            continue
+        if _is_backward_reference(sent, issue_year, own_series):
+            continue
+        if EARLIER_ATTEMPT_RE.search(sent):
+            continue
+        return True
+    return False
 
 PRIVATE_RE = re.compile(
     r"\bprivate(?:ly)?[- ](?:placed|placement|cat(?:astrophe)? bond|ILS|offering|"
@@ -1280,11 +1322,10 @@ def parse_deal(html, deal_url=None):
     if status is None and prose:
         # Deal-scoped only. "The higher risk Class 12 tranche ... will not be
         # issued at all" is a TRANCHE fact; reading it as a deal cancellation
-        # marked the issued ResRe 2020 as never issued.
-        for sent in sentences(prose):
-            if CANCELLED_RE.search(sent) and not CLASS_SCOPED_RE.search(sent):
-                status = "cancelled"
-                break
+        # marked the issued ResRe 2020 as never issued. The sibling, tranche
+        # and earlier-attempt vetoes are in _deal_cancelled.
+        if _deal_cancelled(prose, issue_year, own_series):
+            status = "cancelled"
     record["deal_status"] = _field(
         status or "issued",
         "high" if status else "medium",

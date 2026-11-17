@@ -12,7 +12,26 @@ never also counted as repaid (the double subtraction the old approximation in
 net_supply.py accepted). Extensions hold principal past the scheduled maturity:
 to the stated extension date where the losses table gives one, otherwise to
 the as-of date while the loss is unresolved. A deal with no maturity on its
-page gets an imputed term and a flag; coverage is reported by issued dollars.
+page takes the TRACE maturity of its bridged CUSIPs where the companion
+repository's bridge has one, else an imputed term and a flag; coverage is
+reported by issued dollars.
+
+Maturity precedence, per deal (`maturity_source`):
+
+    stated      the page states a maturity; kept when TRACE agrees within
+                TRACE_TOLERANCE_MONTHS (flag trace_corroborates_stated=+Nm),
+                replaced by TRACE beyond that (trace_maturity_overrides_stated)
+                or when the page date was a per-class vote
+    trace       the TRACE maturity of the deal's bridged CUSIPs: the month
+                shared by most of them, the latest on a tie; replaces a
+                term-derived or imputed page maturity, flagged with the
+                difference and with trace_maturity_tranches_disagree when the
+                CUSIPs do not share one month
+    derived_from_term, imputed_*   as before, where no TRACE maturity exists
+
+The bridge is read with --trace-maturities PATH (default: the sibling
+analysis repository's data/bridge.csv when present; --no-trace-maturities
+turns it off, and the module runs without the analysis repository).
 
 Inputs are the parsed tables under data/ (gitignored). Outputs:
 
@@ -49,6 +68,15 @@ AS_OF = "2026-08"
 # medians of the stated issue-to-maturity span, 36.5 months for public deals
 # (n=226) and 12 months for private placements (n=124), measured 2026-10-25.
 IMPUTED_TERM_MONTHS = {"public": 36, "private": 12}
+
+# TRACE maturities for the bridged deals: one row per (Artemis deal, CUSIP)
+# in the companion repository's strict bridge. Read when present, never
+# required. A page-stated maturity within this many months of the TRACE
+# month is kept (the page states months, TRACE the legal final; TRACE sits
+# one month later than the page in 44% of stated deals and 44% of
+# term-derived ones, measured 2026-11-17); beyond it TRACE wins, flagged.
+TRACE_DEFAULT = ROOT.parent / "cat-bond-flow-analysis" / "data" / "bridge.csv"
+TRACE_TOLERANCE_MONTHS = 3
 
 # An unresolved loss with no stated extension date is carried past its
 # scheduled maturity for at most this long. Cat bond extension provisions
@@ -150,6 +178,49 @@ def link_losses(losses, deals):
     return out
 
 
+def load_trace_maturities(path):
+    """bridge.csv (one row per Artemis deal x TRACE CUSIP) -> one row per
+    deal_url with the deal-level TRACE maturity.
+
+    Rule: the maturity month shared by the most of the deal's bridged CUSIPs,
+    the latest month on a tie. 645 of 700 bridged deals have one month; the
+    55 that do not are multi-term series (Residential Re's one-year and
+    four-year classes) where the longer classes are the majority, and the
+    span between the earliest and latest month is kept for the flag.
+
+    Columns: deal_url, trace_maturity_month, trace_cusips,
+    trace_distinct_months, trace_span_months, trace_min_month, trace_max_month.
+    """
+    b = pd.read_csv(path, dtype=str, keep_default_na=False)
+    b = b[(b.deal_url.str.strip() != "") & (b.trace_maturity_date.str.len() >= 7)]
+    b = b.assign(month=b.trace_maturity_date.str[:7])
+    rows = []
+    for url, g in b.groupby("deal_url", sort=False):
+        counts = g.month.value_counts()
+        top = counts[counts == counts.max()].index
+        chosen = max(top, key=month_index)
+        months = sorted(counts.index, key=month_index)
+        rows.append({"deal_url": url, "trace_maturity_month": chosen, "trace_cusips": int(len(g)),
+                     "trace_distinct_months": int(len(counts)),
+                     "trace_span_months": month_index(months[-1]) - month_index(months[0]),
+                     "trace_min_month": months[0], "trace_max_month": months[-1]})
+    return pd.DataFrame(rows, columns=["deal_url", "trace_maturity_month", "trace_cusips", "trace_distinct_months",
+                                       "trace_span_months", "trace_min_month", "trace_max_month"])
+
+
+def resolve_trace_path(arg="auto"):
+    """'auto' -> the sibling repository's bridge when it exists, else None;
+    None/'' -> off; anything else -> that path (must exist)."""
+    if arg in (None, "", "off", "none"):
+        return None
+    if arg == "auto":
+        return TRACE_DEFAULT if TRACE_DEFAULT.exists() else None
+    path = Path(arg)
+    if not path.exists():
+        raise FileNotFoundError("TRACE maturities file not found: %s" % path)
+    return path
+
+
 # ------------------------------------------------------------- the book ----
 def _amount_m(num_text, unit):
     n = _money_to_number("$%s%s" % (num_text, unit or ""))
@@ -173,18 +244,25 @@ def vintage_terms(book):
 
 
 def deal_book(deals, losses, as_of=AS_OF, term_months=IMPUTED_TERM_MONTHS,
-              extension_cap=EXTENSION_CAP_MONTHS):
+              extension_cap=EXTENSION_CAP_MONTHS, trace=None,
+              trace_tolerance=TRACE_TOLERANCE_MONTHS):
     """One row per deal with everything the roll-forward needs.
 
     Columns: slug, issuer_name, issue_month, size_m (USD), maturity_month,
-    maturity_source, written_down_m, recovered_m, extended_m, extension_month,
-    repay_month (when the remainder actually leaves), remainder_m, flags.
+    maturity_source, page_maturity_month, page_maturity_source,
+    trace_maturity_month (the bridge's month, even when rejected),
+    trace_vs_page_months, written_down_m, recovered_m,
+    extended_m, extension_month, repay_month (when the remainder actually
+    leaves), remainder_m, flags.
 
     `term_months["public"]` may be an int or a {issue_year: int} map.
-    `deal_status` is not used to exclude anything: five "cancelled" statuses
-    are false positives (a withdrawn sibling series or tranche), so a deal
-    with a size and an issue date is in the book and a non-"issued" status
-    is only flagged.
+    `trace` is the frame from `load_trace_maturities`, joined on `deal_url`
+    (ignored when `deals` has no such column). The precedence between the
+    page's maturity and TRACE is in the module docstring.
+    `deal_status` is not used to exclude anything: a deal with a size and an
+    issue date is in the book and a non-"issued" status is only flagged (the
+    five "cancelled" statuses that were a withdrawn sibling series or tranche
+    read "issued" since 2026-11-17).
     """
     conv = [ns.convert_size(s, d) for s, d in zip(deals["size"], deals.date_of_issue)]
     book = pd.DataFrame({
@@ -200,16 +278,47 @@ def deal_book(deals, losses, as_of=AS_OF, term_months=IMPUTED_TERM_MONTHS,
     stated = deals.maturity_date.str.strip() != ""
     derived = deals.maturity_date_derived.str.strip() != ""
     sched = deals.maturity_scheduled.map(ns.issue_month)
-    src, mat, flags = [], [], []
+    class_vote = (deals["maturity_date__flags"].str.contains("maturity_from_class_agreement", regex=False)
+                  if "maturity_date__flags" in deals.columns else pd.Series(False, index=deals.index))
+    trace_by_url = {}
+    if trace is not None and len(trace) and "deal_url" in deals.columns:
+        trace_by_url = {r.deal_url: r for r in trace.itertuples(index=False)}
+    urls = deals["deal_url"].values if "deal_url" in deals.columns else [None] * len(deals)
+    src, mat, flags, page_src, page_mat, trace_mat, trace_diff = [], [], [], [], [], [], []
     for i in range(len(book)):
         f = []
         im = book.issue_month.iat[i]
         m = sched.iat[i]
+        s = None
         if m and im and month_index(m) <= month_index(im):
             f.append("maturity_not_after_issue"); m = None
         if m:
             s = "stated" if stated.iat[i] else "derived_from_term"
-        else:
+        page_src.append(s); page_mat.append(m)
+        tr = trace_by_url.get(urls[i])
+        tm = tr.trace_maturity_month if tr is not None else None
+        diff = None
+        if tm and im and month_index(tm) <= month_index(im):
+            f.append("trace_maturity_rejected_not_after_issue"); tm = None
+        if tm:
+            if tr.trace_distinct_months > 1:
+                f.append("trace_maturity_tranches_disagree=%dm" % tr.trace_span_months)
+            if m:
+                diff = month_index(tm) - month_index(m)
+            if s == "stated":
+                if abs(diff) <= trace_tolerance and not class_vote.iat[i]:
+                    f.append("trace_corroborates_stated=%+dm" % diff)
+                else:
+                    f.append("trace_maturity_overrides_stated=%+dm%s" % (diff, "_class_vote" if class_vote.iat[i] else ""))
+                    m, s = tm, "trace"
+            elif s == "derived_from_term":
+                f.append("trace_maturity_replaces_derived=%+dm" % diff)
+                m, s = tm, "trace"
+            else:
+                f.append("trace_maturity_replaces_imputed")
+                m, s = tm, "trace"
+        trace_mat.append(tr.trace_maturity_month if tr is not None else None); trace_diff.append(diff)
+        if not m:
             cls = "private" if book.private.iat[i] else "public"
             tm = term_months[cls]
             if isinstance(tm, dict):
@@ -224,6 +333,10 @@ def deal_book(deals, losses, as_of=AS_OF, term_months=IMPUTED_TERM_MONTHS,
         src.append(s); mat.append(m); flags.append(f)
     book["maturity_month"] = mat
     book["maturity_source"] = src
+    book["page_maturity_month"] = page_mat
+    book["page_maturity_source"] = page_src
+    book["trace_maturity_month"] = trace_mat
+    book["trace_vs_page_months"] = trace_diff
 
     # Loss events, aggregated to the deal. losses.csv is tranche-level.
     linked = losses[losses.deal_slug.str.strip() != ""]
@@ -435,40 +548,77 @@ def legacy_variants(book, flows, as_of=AS_OF):
             for lm, w in r.events["wd"]:
                 rows.append((lm, "written_down", w))
             mat = r.maturity_month
-            if label == "legacy_3y" and r.maturity_source.startswith("imputed"):
-                mat = add_months(r.issue_month, 36)
+            if label == "legacy_3y":
+                # The old rule saw only the page: its maturity where stated
+                # or term-derived, else issue + 36 months. TRACE did not exist.
+                mat = r.page_maturity_month if r.page_maturity_source else add_months(r.issue_month, 36)
             rows.append((mat, "repaid", r.size_m if not netted else r.size_m - r.written_down_m))
         f = pd.DataFrame(rows, columns=["month", "flow", "m"]).pivot_table(
             index="month", columns="flow", values="m", aggfunc="sum").fillna(0.0).sort_index()
         f["written_down_unlinked"] = flows.written_down_unlinked.reindex(f.index).fillna(0.0)
-        for c in ["recovered", "repaid_after_extension"]:
-            f[c] = 0.0
+        for c in ["issued", "written_down", "repaid", "recovered", "repaid_after_extension"]:
+            if c not in f.columns:
+                f[c] = 0.0
         out[label] = outstanding_by_year(f, as_of).set_index("year").outstanding
     return pd.DataFrame(out)
 
 
 def select_book(book, exclude_mortgage=True):
     """Which deals enter the ledger: every deal with a size, whatever its
-    parsed `deal_status` (five "cancelled" statuses are false positives and
-    the publisher counts those deals), minus mortgage ILS when the comparison
-    is against the publisher's charts."""
+    parsed `deal_status` (the publisher's totals count every sized deal, and
+    the "cancelled" statuses seen so far were a withdrawn sibling series or
+    tranche), minus mortgage ILS when the comparison is against the
+    publisher's charts."""
     out = book[book.size_m.notna()]
     if exclude_mortgage:
         out = out[~out.mortgage]
     return out
 
 
-def build(as_of=AS_OF, exclude_mortgage=True, impute="flat"):
+def build(as_of=AS_OF, exclude_mortgage=True, impute="flat", trace_path="auto"):
+    """`trace_path`: 'auto' (the sibling repository's bridge when present),
+    None to run without TRACE maturities, or a path."""
     deals = pd.read_csv(ROOT / "data" / "deals.csv", keep_default_na=False, dtype=str)
     losses = link_losses(pd.read_csv(ROOT / "data" / "losses.csv", keep_default_na=False, dtype=str), deals)
-    book = deal_book(deals, losses, as_of)
+    path = resolve_trace_path(trace_path)
+    trace = load_trace_maturities(path) if path else None
+    book = deal_book(deals, losses, as_of, trace=trace)
     if impute == "vintage":
         terms = {"public": vintage_terms(book), "private": IMPUTED_TERM_MONTHS["private"]}
-        book = deal_book(deals, losses, as_of, term_months=terms)
+        book = deal_book(deals, losses, as_of, term_months=terms, trace=trace)
+    book.attrs["trace_path"] = str(path) if path else None
     book = select_book(book, exclude_mortgage)
     unlinked = losses[losses.link_method == "unlinked"]
     flows = monthly_flows(book, unlinked)
     return book, losses, flows
+
+
+def trace_check(book):
+    """How the page's maturities and TRACE's compare, on the deals in the book
+    that have both: one row per (page source, outcome, TRACE minus page in
+    months), with deal counts and issued dollars. Aggregates only."""
+    b = book[book.trace_maturity_month.notna()]
+    rows = []
+    for r in b.itertuples(index=False):
+        fl = r.flags or ""
+        if "trace_corroborates_stated" in fl:
+            outcome = "stated_kept"
+        elif "trace_maturity_overrides_stated" in fl:
+            outcome = "trace_overrides_stated" + ("_class_vote" if "_class_vote" in fl else "")
+        elif "trace_maturity_replaces_derived" in fl:
+            outcome = "trace_replaces_derived"
+        elif "trace_maturity_replaces_imputed" in fl:
+            outcome = "trace_replaces_imputed"
+        else:
+            outcome = "trace_rejected"
+        rows.append({"page_source": r.page_maturity_source or "none", "outcome": outcome,
+                     "trace_minus_page_months": r.trace_vs_page_months, "size_m": r.size_m or 0.0})
+    if not rows:
+        return pd.DataFrame(columns=["page_source", "outcome", "trace_minus_page_months", "n_deals", "usd_m"])
+    t = pd.DataFrame(rows)
+    out = t.groupby(["page_source", "outcome", "trace_minus_page_months"], dropna=False).agg(
+        n_deals=("size_m", "size"), usd_m=("size_m", "sum")).reset_index()
+    return out.sort_values(["page_source", "outcome", "trace_minus_page_months"]).reset_index(drop=True)
 
 
 def main():
@@ -477,8 +627,14 @@ def main():
     ap.add_argument("--impute", choices=("flat", "vintage"), default="flat",
                     help="term for deals with no maturity: flat class medians (default) "
                          "or the size-weighted mean known term of the issue year")
+    ap.add_argument("--trace-maturities", default="auto", metavar="PATH",
+                    help="the analysis repository's bridge.csv (deal_url, cusip_id, "
+                         "trace_maturity_date); default: %s when it exists" % TRACE_DEFAULT)
+    ap.add_argument("--no-trace-maturities", action="store_true",
+                    help="run on page maturities and imputation alone")
     args = ap.parse_args()
-    book, losses, flows = build(args.as_of, exclude_mortgage=True, impute=args.impute)
+    trace_path = None if args.no_trace_maturities else args.trace_maturities
+    book, losses, flows = build(args.as_of, exclude_mortgage=True, impute=args.impute, trace_path=trace_path)
     yearly = outstanding_by_year(flows, args.as_of)
     theirs = ns.dashboard_series()[["year", "artemis_issued", "artemis_outstanding"]]
     cmpd = yearly.merge(theirs, on="year", how="left")
@@ -495,6 +651,12 @@ def main():
     cov = coverage(book)
     pd.set_option("display.width", 250)
     print("=== roll-forward, ex-mortgage, as of %s: %d deals in the book ===" % (args.as_of, len(book)))
+    tc = trace_check(book)
+    if book.attrs.get("trace_path"):
+        print("TRACE maturities from %s: %d deals in the book bridged" % (book.attrs["trace_path"], int(book.trace_maturity_month.notna().sum())))
+        print(tc.groupby(["page_source", "outcome"]).agg(n_deals=("n_deals", "sum"), usd_m=("usd_m", "sum")).round(0).to_string())
+    else:
+        print("TRACE maturities: off")
     print("loss rows: %s" % losses.link_method.value_counts().to_dict())
     lk = losses[losses.is_settled == "True"].assign(m=lambda d: pd.to_numeric(d.loss_amount_derived, errors="coerce") / 1e6).groupby("link_method").m.sum().round(0).to_dict()
     print("settled written-down $m by link method: %s" % lk)
@@ -518,6 +680,7 @@ def main():
     for _, r in cov.iterrows():
         tracked["cov_%s_pct" % r.maturity_source] = round(r.share_pct, 2)
     tracked.round(3).to_csv(DASH_OUT / "outstanding.csv", index=False)
+    tc.round(3).to_csv(DASH_OUT / "trace_maturities.csv", index=False)
 
     up = upcoming_maturities(book, args.as_of)
     q = up.pivot_table(index="quarter", columns="kind", values="m", aggfunc="sum").fillna(0.0)
@@ -538,7 +701,8 @@ def main():
     print("window total: publisher %.0f, ours %.0f; mean |quarterly diff| %.0f"
           % (inwin.artemis_maturing_m.sum(), inwin.our_scheduled_m.sum(), inwin.diff_m.abs().mean()))
     print("\nwrote data/outstanding_rollforward.csv, data/outstanding_deals.csv, "
-          "data/validation_dashboards/outstanding.csv, data/validation_dashboards/maturities.csv")
+          "data/validation_dashboards/outstanding.csv, data/validation_dashboards/maturities.csv, "
+          "data/validation_dashboards/trace_maturities.csv")
 
 
 if __name__ == "__main__":

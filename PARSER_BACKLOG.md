@@ -113,7 +113,17 @@ CLASS's term on a multi-class page. Result: 354 stated maturities,
   strings): where it fires the stated date wins and the term was approximate
   ("three-year" issued March, matures June). 94 deals; read a few.
 - Remaining ~700 deals with neither: mostly page-silent (sampled 5/6 before
-  this round). Private deals are 332 of them.
+  this round). Private deals are 332 of them. Since 2026-11-17 the
+  roll-forward takes the TRACE legal final for the 700 bridged deals
+  (`roll_forward.load_trace_maturities`, flag-recorded precedence against
+  the page), which covers 317 of the page-silent ones and 189 of the
+  term-derived; the page-side recall items above still matter for the
+  ~520 unbridged deals and as the cross-check. Page reads that TRACE
+  showed to be wrong, worth a look: Fidus 2021-1 "twelve-year", Ursa Re II
+  2021-1 "nine month", Matterhorn 2022-2 "6 month", Sanders II 2021-2
+  "four month", Gateway 2023-1 and Alamo 2021-1 "one-year" (a one-year
+  class read as the term), Sanders III 2022-3 "April 2023" and Bonanza
+  2023-1 "January 2024" (multiple candidates, the earlier picked).
 
 ## 4. Lifecycle extractor breadth — measured 2026-09-15, still thin
 
@@ -154,13 +164,11 @@ convention (issue-month rate?) instead of dropping them.
 
 ## 7. Known-opens from reviews never closed
 
-- `deal_status = cancelled` fires on a withdrawn SIBLING series or a pulled
-  TRANCHE (Everglades Re II 2024-1 "$1.1bn": "The Series 2024-2 notes ...
-  withdrawn"; Atlas IX 2013-1 and Tradewynd 2013-2: one tranche pulled).
-  All five cancelled deals are in the publisher's issuance totals. Read
-  2026-10-25 while building `roll_forward.py`, which ignores the status and
-  flags it; the `terminal_status` cue needs the sibling and tranche vetoes
-  the size reader already has.
+- `deal_status = cancelled` false positives: CLOSED 2026-11-17.
+  `_deal_cancelled` vetoes tranche-scoped sentences, sibling/predecessor
+  references and earlier attempts; the five deals read `issued`, zero
+  remain cancelled, Gateway 2024-3 and Queen Street X still terminal.
+  Pinned on the real sentences and mutation-tested (HANDOFF 2026-11-17).
 
 - `coupon of X% to Y%` returns the low end (round-3; Lion I was right by luck).
 - Mutation table said several guards deletable-green (round-3 report §Priority D

@@ -46,7 +46,7 @@ from sibling_registry import SiblingRegistry  # noqa: E402
 from fetch import DEAL_DIRECTORY_URL as BASE  # noqa: E402
 from parse_deal import (_is_backward_reference, sentences,  # noqa: E402
                         _pct_to_float, _series_tokens, CUMULATIVE_RE,
-                        _cites_only_foreign_series,
+                        _cites_only_foreign_series, _deal_cancelled,
                         SPECULATIVE_SIZE_RE, TRANCHE_OF_RE)
 from mentions import canon_label, classify  # noqa: E402
 from net_supply import usd_millions, convert_size, issue_month, load_fx  # noqa: E402
@@ -900,6 +900,7 @@ def unit_predicates():
                c["local_m"], c["currency"], c["fx_usd_per_unit"])
         check(got == want, f"UNIT convert_size {size!r} {date!r}", f"want={want} got={got}")
     unit_roll_forward()
+    unit_trace_maturities()
     for text, want in [
         ("this issuance remains at UK \u00a3100 million in size, but the spread", True),
         ("did not change in size, so will secure the company $75 million", True),
@@ -916,6 +917,34 @@ def unit_predicates():
     ]:
         got = bool(CANCELLED_RE.search(text))
         check(got == want, f"UNIT cancelled {text[:40]!r}", f"want={want} got={got}")
+    # The cue is a deal fact only when the sentence is about this deal as a
+    # whole: the five false positives of 2026-10-25 and the two true ones.
+    for text, iy, name, want in [
+        ("Update 2: In an interesting turn of events, and slightly unsual for a cat bond issuance, "
+         "this deal has now shrunk slightly and one tranche of notes has been pulled completely.",
+         2013, "Atlas IX Capital Limited (Series 2013-1)", False),
+        ("Update 1: One of the four tranches of notes has been withdrawn from the issuance and the "
+         "other three now have preliminary sizes which in total add up to $180m.",
+         2013, "Tradewynd Re Ltd. (Series 2013-2)", False),
+        ("The Series 2024-2 notes that were initially offered have been withdrawn and won\u2019t now be issued.",
+         2024, "Everglades Re II Ltd. (Series 2024-1)", False),
+        ("However, that issuance was cancelled, due to conditions in the ILS market and broader capital "
+         "markets, as well as the effect this had on investor appetite and UnipolSai\u2019s 2022 cat bond was "
+         "one of those that suffered, so the company elected to halt that issue.",
+         2024, "Azzurro Re II DAC (Series 2024-1)", False),
+        ("This Titania Re 2024-1 issuance sees the company looking to issue a deal that was not completed "
+         "earlier this year, when in May 2024 Ariel Re stepped back from completing the issuance.",
+         2024, "Titania Re Ltd. (Series 2024-1)", False),
+        ("Update: We learned from sources that this Gateway Re 2024-3 catastrophe bond issuance has been "
+         "cancelled, as the sponsors made a commercial decision not to proceed with placing the transaction.",
+         2024, "Gateway Re Ltd. (Series 2024-3)", True),
+        ("The Queen Street X Re Ltd. cat bond issuance was not completed.", 2015, "Queen Street X Re Ltd.", True),
+        ("Both tranches of notes were withdrawn and the deal did not proceed.", 2020, "Z Re Ltd. (Series 2020-1)", True),
+        ("The Class B notes were pulled and the deal has been upsized.", 2020, "Z Re Ltd. (Series 2020-1)", False),
+    ]:
+        own = _series_tokens(name)
+        got = _deal_cancelled(text, iy, own)
+        check(got == want, f"UNIT deal-cancelled {text[:44]!r}", f"want={want} got={got}")
     fwd = _bindings_by_label("Class A \u2013 $256 million Class B \u2013 $647.6 million Class C \u2013 $155 million")
     check(fwd == {"CLASS A": ["$256 million"], "CLASS B": ["$647.6 million"],
                   "CLASS C": ["$155 million"]}, "UNIT forward label binding", str(fwd))
@@ -1105,6 +1134,105 @@ def unit_roll_forward():
     v = rf.legacy_variants(b, rf.monthly_flows(b))
     check(round(v.loc[2023, "netted"] - v.loc[2023, "no_netting"], 6) == 40.0 and round(v.loc[2023, "no_netting"], 6) == -40.0,
           "UNIT roll-forward legacy double subtraction equals the write-down", v.loc[2023].to_dict().__repr__())
+
+
+def unit_trace_maturities():
+    """TRACE maturities from the bridge as a maturity tier: the deal-level
+    rule, the precedence against the page, and the legacy fallback."""
+    import tempfile
+    import pandas as pd
+
+    bridge = pd.DataFrame([
+        ("https://x/a/", "A1", "2027-12-06"), ("https://x/a/", "A2", "2027-12-06"), ("https://x/a/", "A3", "2024-12-06"),
+        ("https://x/b/", "B1", "2026-01-08"), ("https://x/b/", "B2", "2027-01-08"),
+        ("https://x/c/", "C1", ""),
+        ("https://x/d/", "D1", "2023-07-07"),
+        ("https://x/s2/", "S2", "2025-06-07"), ("https://x/s3/", "S3", "2023-06-07"),
+        ("https://x/s4/", "S4", "2023-07-07"), ("https://x/s6/", "S6", "2020-06-07"),
+    ], columns=["deal_url", "cusip_id", "trace_maturity_date"])
+    with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as fh:
+        bridge.to_csv(fh.name, index=False)
+        path = fh.name
+    tr = rf.load_trace_maturities(path).set_index("deal_url")
+    a = tr.loc["https://x/a/"]
+    check(a.trace_maturity_month == "2027-12" and a.trace_cusips == 3 and a.trace_distinct_months == 2 and a.trace_span_months == 36,
+          "UNIT trace maturity: month shared by most CUSIPs, span kept", a.to_dict().__repr__())
+    check(tr.loc["https://x/b/"].trace_maturity_month == "2027-01", "UNIT trace maturity: tie goes to the latest month",
+          tr.loc["https://x/b/"].trace_maturity_month)
+    check("https://x/c/" not in tr.index and tr.loc["https://x/d/"].trace_cusips == 1,
+          "UNIT trace maturity: blank dates dropped, single CUSIP kept", str(list(tr.index)))
+    check(rf.resolve_trace_path(None) is None and rf.resolve_trace_path("off") is None
+          and rf.resolve_trace_path(path) == Path(path), "UNIT trace path resolution")
+    try:
+        rf.resolve_trace_path("/nonexistent/bridge.csv")
+        check(False, "UNIT trace path missing raises")
+    except FileNotFoundError:
+        check(True, "UNIT trace path missing raises")
+
+    cols = ["deal_slug", "deal_url", "index_issuer_name", "size", "date_of_issue", "maturity_date",
+            "maturity_date__flags", "maturity_date_derived", "maturity_scheduled", "deal_is_private", "deal_status"]
+    rows = [
+        ("s1", "https://x/d/", "S1 Re", "$100m", "Jun 2020", "June 2023", "", "", "Jun 2023", "", "issued"),
+        ("s2", "https://x/s2/", "S2 Re", "$100m", "Jun 2020", "June 2023", "", "", "Jun 2023", "", "issued"),
+        ("s3", "https://x/s3/", "S3 Re", "$100m", "Jun 2020", "June 2023", "maturity_from_class_agreement=['C']", "", "Jun 2023", "", "issued"),
+        ("s4", "https://x/s4/", "S4 Re", "$100m", "Jun 2020", "", "", "June 2023", "Jun 2023", "", "issued"),
+        ("s5", "https://x/a/", "S5 Re", "$100m", "Jun 2020", "", "", "", "", "", "issued"),
+        ("s6", "https://x/s6/", "S6 Re", "$100m", "Jun 2020", "", "", "", "", "", "issued"),
+        ("s7", "https://x/none/", "S7 Re", "$100m", "Jun 2020", "", "", "", "", "", "issued"),
+    ]
+    d = pd.DataFrame([dict(zip(cols, r)) for r in rows], columns=cols, dtype=str).fillna("")
+    L = pd.DataFrame(columns=["cat_bond", "deal_slug", "orig_size", "loss_amount", "date_of_loss",
+                              "loss_status", "loss_amount_derived", "is_settled"], dtype=str)
+    trace = rf.load_trace_maturities(path)
+    b = rf.deal_book(d, L, trace=trace).set_index("slug")
+    check(b.loc["s1"].maturity_source == "stated" and b.loc["s1"].maturity_month == "2023-06"
+          and "trace_corroborates_stated=+1m" in b.loc["s1"]["flags"],
+          "UNIT trace tier: stated within tolerance kept, corroboration flagged", b.loc["s1"]["flags"])
+    check(b.loc["s2"].maturity_source == "trace" and b.loc["s2"].maturity_month == "2025-06"
+          and "trace_maturity_overrides_stated=+24m" in b.loc["s2"]["flags"],
+          "UNIT trace tier: stated beyond tolerance replaced by TRACE", b.loc["s2"]["flags"])
+    check(b.loc["s3"].maturity_source == "trace" and "trace_maturity_overrides_stated=+0m_class_vote" in b.loc["s3"]["flags"],
+          "UNIT trace tier: a per-class vote yields to TRACE", b.loc["s3"]["flags"])
+    check(b.loc["s4"].maturity_source == "trace" and b.loc["s4"].maturity_month == "2023-07"
+          and "trace_maturity_replaces_derived=+1m" in b.loc["s4"]["flags"],
+          "UNIT trace tier: term-derived replaced by TRACE", b.loc["s4"]["flags"])
+    check(b.loc["s5"].maturity_source == "trace" and b.loc["s5"].maturity_month == "2027-12"
+          and "trace_maturity_replaces_imputed" in b.loc["s5"]["flags"] and "term_imputed" not in b.loc["s5"]["flags"],
+          "UNIT trace tier: no page maturity takes TRACE, nothing imputed", b.loc["s5"]["flags"])
+    check("trace_maturity_tranches_disagree=36m" in b.loc["s5"]["flags"],
+          "UNIT trace tier: CUSIPs on different months flagged with the span", b.loc["s5"]["flags"])
+    check(b.loc["s6"].maturity_source == "imputed_public_36m" and "trace_maturity_rejected_not_after_issue" in b.loc["s6"]["flags"],
+          "UNIT trace tier: TRACE maturity at or before issue rejected, term imputed", b.loc["s6"]["flags"])
+    check(b.loc["s7"].maturity_source == "imputed_public_36m" and b.loc["s7"].trace_maturity_month is None,
+          "UNIT trace tier: unbridged deal imputed as before", b.loc["s7"]["flags"])
+    check((b.loc["s4"].page_maturity_month, b.loc["s4"].page_maturity_source) == ("2023-06", "derived_from_term")
+          and b.loc["s5"].page_maturity_source is None and b.loc["s2"].trace_vs_page_months == 24,
+          "UNIT trace tier: page maturity and difference kept beside the choice",
+          str((b.loc["s4"].page_maturity_month, b.loc["s4"].page_maturity_source, b.loc["s2"].trace_vs_page_months)))
+    nb = rf.deal_book(d.drop(columns=["deal_url"]), L, trace=trace).set_index("slug")
+    check(nb.loc["s5"].maturity_source == "imputed_public_36m" and nb.loc["s1"].maturity_source == "stated",
+          "UNIT trace tier: without deal_url the bridge is ignored", str(list(nb.maturity_source)))
+    bb = b.reset_index()
+    v = rf.legacy_variants(bb, rf.monthly_flows(bb))
+    book5 = bb[bb.slug == "s5"]
+    v5 = rf.legacy_variants(book5, rf.monthly_flows(book5))
+    check(round(v5.loc[2023, "legacy_3y"], 6) == 0.0 and round(v5.loc[2023, "netted"], 6) == 100.0
+          and round(v5.loc[2022, "legacy_3y"], 6) == 100.0,
+          "UNIT trace tier: legacy_3y still imputes 36 months where the page had nothing", v5.to_string())
+    book2 = bb[bb.slug == "s2"]
+    v2 = rf.legacy_variants(book2, rf.monthly_flows(book2))
+    check(round(v2.loc[2024, "legacy_3y"], 6) == 0.0 and round(v2.loc[2024, "netted"], 6) == 100.0,
+          "UNIT trace tier: legacy_3y keeps the page's stated month where TRACE replaced it", v2.to_string())
+    cov = rf.coverage(bb)
+    check(abs(cov.share_pct.sum() - 100) < 1e-9 and "trace" in set(cov.maturity_source)
+          and float(cov.set_index("maturity_source").loc["trace"].n_deals) == 4,
+          "UNIT trace tier: coverage counts the TRACE tier", cov.to_string())
+    tc = rf.trace_check(bb)
+    got = tc.groupby("outcome").n_deals.sum().to_dict()
+    check(got == {"stated_kept": 1, "trace_overrides_stated": 1, "trace_overrides_stated_class_vote": 1,
+                  "trace_replaces_derived": 1, "trace_replaces_imputed": 1, "trace_rejected": 1},
+          "UNIT trace tier: check table outcomes", str(got))
+    os.unlink(path)
 
 
 def unit_component_scope():
@@ -1704,7 +1832,7 @@ def main():
     # checks when the separate-series-total rule was pinned (2026-10-21).
     # The tiers are pinned separately so unit checks can be added without
     # touching the golden pin, which has only ever been measured over raw/.
-    EXPECTED_UNIT_CHECKS = 262
+    EXPECTED_UNIT_CHECKS = 290
     EXPECTED_GOLDEN_CHECKS = 1965
     n_golden = len(results) - n_unit
     if n_unit != EXPECTED_UNIT_CHECKS:

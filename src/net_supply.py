@@ -26,8 +26,10 @@ Outstanding principal used to be approximated here (issue + 3 years where no
 maturity was stated, settled losses subtracted at the loss date and the full
 size subtracted again at maturity). That double subtraction ran 2.4 to 4.9bn
 low in 2020-2026 and is gone: the stock now comes from `roll_forward.py`, a
-deal-level ledger with netted write-downs, extensions and recoveries, and a
-flagged imputed term for deals with no maturity.
+deal-level ledger with netted write-downs, extensions and recoveries, the
+TRACE maturity of the bridged CUSIPs where the companion analysis repository
+provides one (`roll_forward.TRACE_DEFAULT`; `build(trace_path=None)` runs
+without it), and a flagged imputed term for the rest.
 
 Outputs stay local (data derived from Artemis): data/net_supply.csv,
 plots/net_supply.png.
@@ -174,11 +176,11 @@ def issued_by_year(exclude_mortgage):
     return issued, stats
 
 
-def build(exclude_mortgage):
+def build(exclude_mortgage, trace_path="auto"):
     """Issued by year joined to the roll-forward's stock and flows."""
     import roll_forward as rf
     issued, stats = issued_by_year(exclude_mortgage)
-    book, losses, flows = rf.build(exclude_mortgage=exclude_mortgage)
+    book, losses, flows = rf.build(exclude_mortgage=exclude_mortgage, trace_path=trace_path)
     yearly = rf.outstanding_by_year(flows).set_index("year")
     t = pd.DataFrame(index=range(int(issued.index.min()), int(rf.AS_OF[:4]) + 1))
     t = t.join(issued).join(yearly[["repaid", "written_down", "recovered", "outstanding", "measured_at"]]
@@ -187,22 +189,34 @@ def build(exclude_mortgage):
     cov = rf.coverage(book).set_index("maturity_source").share_pct
     stats.update({"book_deals": len(book),
                   "stated_maturities": int((book.maturity_source == "stated").sum()),
-                  "pct_dollars_stated_or_derived": float(cov.get("stated", 0) + cov.get("derived_from_term", 0))})
+                  "trace_maturities": int((book.maturity_source == "trace").sum()),
+                  "pct_dollars_stated_or_derived": float(cov.get("stated", 0) + cov.get("derived_from_term", 0)),
+                  "pct_dollars_known": float(cov.get("stated", 0) + cov.get("derived_from_term", 0) + cov.get("trace", 0)),
+                  "trace_path": book.attrs.get("trace_path")})
     return t.reset_index().rename(columns={"index": "year"}), stats
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--trace-maturities", default="auto", metavar="PATH",
+                    help="the analysis repository's bridge.csv; default: the sibling checkout when present")
+    ap.add_argument("--no-trace-maturities", action="store_true")
+    args = ap.parse_args()
+    trace_path = None if args.no_trace_maturities else args.trace_maturities
     theirs = dashboard_series()
     for label, excl in [("full index", False), ("excluding mortgage ILS", True)]:
-        ours, stats = build(excl)
+        ours, stats = build(excl, trace_path=trace_path)
         cmpd = theirs.merge(ours, on="year", how="inner")
         cmpd["issued_diff"] = cmpd.our_issued - cmpd.artemis_issued
         cmpd["out_diff"] = cmpd.our_outstanding - cmpd.artemis_outstanding
-        print("\n=== %s  (%d deals, %d stated maturities, %.1f%% of issued dollars with a stated "
-              "or term-derived maturity; %d non-USD deals converted at issue-month rates, "
+        print("\n=== %s  (%d deals, %d stated maturities, %d TRACE maturities%s; %.1f%% of issued "
+              "dollars with a stated or term-derived maturity, %.1f%% with one of those or TRACE; "
+              "%d non-USD deals converted at issue-month rates, "
               "%.0fm local -> $%.0fm; %d with no rate, %.0fm local, excluded from sums) ==="
-              % (label, stats["n_deals"], stats["stated_maturities"],
-                 stats["pct_dollars_stated_or_derived"], stats["n_converted"],
+              % (label, stats["n_deals"], stats["stated_maturities"], stats["trace_maturities"],
+                 " from %s" % stats["trace_path"] if stats["trace_path"] else " (off)",
+                 stats["pct_dollars_stated_or_derived"], stats["pct_dollars_known"], stats["n_converted"],
                  stats["converted_local_m"], stats["converted_usd_m"], stats["n_fx_missing"],
                  stats["fx_missing_local_m"]))
         print("  mean |issued diff|:      $%6.0fm   (their mean issued $%.0fm)"
