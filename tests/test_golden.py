@@ -1640,6 +1640,164 @@ def unit_maturity_recall_round3():
         check(_term_to_years(text) == years, f"UNIT term-to-years {text!r}", repr(_term_to_years(text)))
 
 
+def unit_class_repayment():
+    """Class-level repayment for multi-term deals (2026-11-17): the class
+    loader, the split rule and its guards, the scaling with write-downs, and
+    the flows and upcoming maturities it produces."""
+    import tempfile
+    import pandas as pd
+
+    bridge = pd.DataFrame([
+        ("https://x/a/", "A1", "2025-06-07"), ("https://x/a/", "A2", "2028-06-07"), ("https://x/a/", "A3", "2028-06-07"),
+        ("https://x/b/", "B1", "2025-06-07"), ("https://x/b/", "B2", "2028-06-07"),
+    ], columns=["deal_url", "cusip_id", "trace_maturity_date"])
+    classes = pd.DataFrame([
+        ("A1", "https://x/a/", "A", "True"), ("A2", "https://x/a/", "B", "True"), ("A3", "https://x/a/", "B", "True"),
+        ("B1", "https://x/b/", "A", "True"), ("B2", "https://x/b/", "B", "False"),
+    ], columns=["cusip_id", "deal_url", "class_label", "unanimous"])
+    with tempfile.TemporaryDirectory() as td:
+        bp, cp = Path(td) / "bridge.csv", Path(td) / "classes.csv"
+        bridge.to_csv(bp, index=False); classes.to_csv(cp, index=False)
+        cm = rf.load_class_maturities(bp, cp)
+        tr = rf.load_trace_maturities(bp)
+    got = {(r.deal_url, r.class_label): (r.class_month, r.class_cusips) for r in cm.itertuples(index=False)}
+    check(got == {("https://x/a/", "A"): ("2025-06", 1), ("https://x/a/", "B"): ("2028-06", 2),
+                  ("https://x/b/", "A"): ("2025-06", 1)},
+          "UNIT class loader: unanimous labels only, month per class", repr(got))
+    check(rf._norm_class("Class A-1") == "A1" and rf._norm_class("a1") == "A1" and rf._norm_class("") == "",
+          "UNIT class label normalisation")
+
+    # The split rule.
+    cls = {"A": ("2025-06", False, 1), "B": ("2028-06", False, 2)}
+    off, flag = rf.class_split(cls, {"A": 100.0, "B": 200.0}, 300.0, "2028-06", 3)
+    check(off == [("A", "2025-06", 100.0)] and flag == "maturity_split=class_level:2_of_2_classes",
+          "UNIT class split: only the class off the majority month leaves separately", repr((off, flag)))
+    off, flag = rf.class_split(cls, {"A": 100.0}, 300.0, "2028-06", 3)
+    check(off == [("A", "2025-06", 100.0)] and "unlabelled_remainder" in flag,
+          "UNIT class split: a class without a size leaves the remainder unlabelled", repr((off, flag)))
+    off, flag = rf.class_split(cls, {"A": 200.0, "B": 200.0}, 300.0, "2028-06", 3)
+    check(off == [] and flag.startswith("maturity_split=fallback_class_sizes_exceed_deal"),
+          "UNIT class split: sizes above the deal fall back", repr((off, flag)))
+    off, flag = rf.class_split(cls, {"A": 100.5, "B": 200.5}, 300.0, "2028-06", 3)
+    check(len(off) == 1 and abs(off[0][2] - 100.5 * 300 / 301) < 1e-9,
+          "UNIT class split: sizes within tolerance are capped to the deal", repr(off))
+    off, flag = rf.class_split({}, {"A": 100.0}, 300.0, "2028-06", 3)
+    check(off == [] and flag == "maturity_split=majority_no_class_labels", "UNIT class split: no labels -> majority", flag)
+    off, flag = rf.class_split(cls, {"C": 100.0}, 300.0, "2028-06", 3)
+    check(off == [] and flag == "maturity_split=majority_no_class_size_match", "UNIT class split: no size match -> majority", flag)
+    off, flag = rf.class_split({"A": ("2025-06", True, 1), "B": ("2028-06", False, 2)}, {"A": 100.0, "B": 200.0}, 300.0, "2028-06", 3)
+    check("class_months_disagree=A" in flag, "UNIT class split: a class whose CUSIPs disagree is flagged", flag)
+    off, flag = rf.class_split({"A": ("2025-06", False, 1), "B": ("2028-06", False, 1)}, {"A": 100.0, "B": 200.0}, 300.0, "2028-06", 3)
+    check("unlabelled_remainder" in flag, "UNIT class split: a bridged CUSIP without a label marks the remainder", flag)
+    off, flag = rf.class_split({"A": ("2025-06", True), "B": ("2028-06", False)}, {"A": 100.0, "B": 200.0}, 300.0, "2028-06", 2)
+    check("class_months_disagree=A" in flag, "UNIT class split: a class whose CUSIPs disagree is flagged", flag)
+
+    # Through the book: deal a, $300m, classes A ($100m, 2025-06) and B ($200m, 2028-06).
+    def deals(rows):
+        cols = ["deal_slug", "index_issuer_name", "size", "date_of_issue", "maturity_date",
+                "maturity_date_derived", "maturity_scheduled", "deal_is_private", "deal_status", "deal_url"]
+        return pd.DataFrame([dict(zip(cols, r)) for r in rows], columns=cols, dtype=str).fillna("")
+
+    def losses(rows):
+        cols = ["cat_bond", "deal_slug", "orig_size", "loss_amount", "date_of_loss",
+                "loss_status", "loss_amount_derived", "is_settled", "time_to_resolution"]
+        return pd.DataFrame([dict(zip(cols, r)) for r in rows], columns=cols, dtype=str).fillna("")
+
+    tranches = pd.DataFrame([("a", "Class A", "$100m"), ("a", "Class B", "$200 million")],
+                            columns=["deal_slug", "tranche_id", "tranche_size_final"])
+    d = deals([("a", "A Re Ltd.", "$300m", "Jun 2022", "", "", "", "", "issued", "https://x/a/")])
+    b = rf.deal_book(d, losses([]), trace=tr, classes=cm, tranches=tranches)
+    row = b.iloc[0]
+    check(row.maturity_month == "2028-06" and "trace_maturity_tranches_disagree=36m" in row["flags"]
+          and "maturity_split=class_level:2_of_2_classes" in row["flags"],
+          "UNIT class repayment: majority month kept, split flagged", row["flags"])
+    check(row.class_repay == [("A", "2025-06", 100.0)], "UNIT class repayment: class A leaves at its own month", repr(row.class_repay))
+    f = rf.monthly_flows(b)
+    check(abs(f.loc["2025-06", "repaid"] - 100.0) < 1e-9 and abs(f.loc["2028-06", "repaid"] - 200.0) < 1e-9,
+          "UNIT class repayment: flows split 100 / 200", repr(f.repaid.to_dict()))
+    y = rf.outstanding_by_year(f, "2028-08").set_index("year").outstanding
+    check((y[2024], y[2025], y[2027], y[2028]) == (300.0, 200.0, 200.0, 0.0),
+          "UNIT class repayment: stock steps down at each class", repr(y.to_dict()))
+    up = rf.upcoming_maturities(b, "2024-12")
+    check(sorted(zip(up.month, up.m)) == [("2025-06", 100.0), ("2028-06", 200.0)],
+          "UNIT class repayment: upcoming maturities per class", repr(up.to_dict("records")))
+    # A $60m write-down scales both classes: 240 remaining -> A 80, B 160.
+    L = losses([("A Re Ltd. (Series 1) Class A", "a", "$100m", "$60m", "Jan 2024", "stated_amount", "60000000.0", "True", "3 months")])
+    b = rf.deal_book(d, L, trace=tr, classes=cm, tranches=tranches)
+    f = rf.monthly_flows(b)
+    check(abs(f.loc["2025-06", "repaid"] - 80.0) < 1e-9 and abs(f.loc["2028-06", "repaid"] - 160.0) < 1e-9
+          and abs(f.loc["2024-01", "written_down"] - 60.0) < 1e-9,
+          "UNIT class repayment: a write-down scales every class", repr(f.to_dict()))
+    # Without the classes file the deal leaves whole at the majority month.
+    b = rf.deal_book(d, losses([]), trace=tr)
+    check(b.iloc[0].class_repay == [] and "maturity_split" not in b.iloc[0]["flags"]
+          and abs(rf.monthly_flows(b).loc["2028-06", "repaid"] - 300.0) < 1e-9,
+          "UNIT class repayment: off without the classes file", b.iloc[0]["flags"])
+    # Classes present but no labels for this deal: flagged, whole at majority.
+    b = rf.deal_book(d, losses([]), trace=tr, classes=cm[cm.deal_url == "https://x/b/"], tranches=tranches)
+    check("maturity_split=majority_no_class_labels" in b.iloc[0]["flags"] and b.iloc[0].class_repay == [],
+          "UNIT class repayment: no labels for the deal -> majority, flagged", b.iloc[0]["flags"])
+    check(rf.resolve_classes_path(None) is None and rf.resolve_classes_path("off") is None,
+          "UNIT classes path resolution")
+
+
+def unit_loss_timing():
+    """--loss-timing settlement (2026-11-17): the settlement month read from
+    the row, and the ledger moving the write-down to it; the default is
+    unchanged."""
+    import pandas as pd
+
+    class R:
+        def __init__(self, ttr, text=""):
+            self.time_to_resolution, self.loss_amount = ttr, text
+
+    for ttr, text, lm, want in [
+        ("Approx. 18 months", "", "2017-09", ("2019-03", "loss_timing=settlement:+18m")),
+        ("Roughly 34 months", "", "2017-12", ("2020-10", "loss_timing=settlement:+34m")),
+        ("Approx. two years", "", "2018-10", ("2020-10", "loss_timing=settlement:+24m")),
+        ("Approx. 53 months, principal reduced to zero at end of Feb 2023", "", "2018-10", ("2023-02", "loss_timing=settlement:dated")),
+        ("Approx. 19 months (Irma Sept. 2017, to notes delisted with zero balance Mar. 2019)", "", "2017-09", ("2019-03", "loss_timing=settlement:dated")),
+        ("Paid out in 2020", "", "2018-12", ("2020-12", "loss_timing=settlement:year")),
+        ("Loss payments finished in 2020", "", "2017-12", ("2020-12", "loss_timing=settlement:year")),
+        ("Ongoing", "Principal steadily reduced down to $25m, then redeemed in April 2026", "2020-12", ("2026-04", "loss_timing=settlement:dated")),
+        ("Ongoing", "", "2022-09", ("2022-09", "loss_settlement_unknown")),
+        ("5 weeks", "", "2022-09", ("2022-09", "loss_settlement_unknown")),
+        ("3 months", "", None, (None, "loss_settlement_unknown")),
+    ]:
+        got = rf.settlement_month(R(ttr, text), lm)
+        check(got == want, f"UNIT settlement month {ttr[:30]!r}", f"want={want} got={got}")
+
+    def deals(rows):
+        cols = ["deal_slug", "index_issuer_name", "size", "date_of_issue", "maturity_date",
+                "maturity_date_derived", "maturity_scheduled", "deal_is_private", "deal_status"]
+        return pd.DataFrame([dict(zip(cols, r)) for r in rows], columns=cols, dtype=str).fillna("")
+
+    def losses(rows):
+        cols = ["cat_bond", "deal_slug", "orig_size", "loss_amount", "date_of_loss",
+                "loss_status", "loss_amount_derived", "is_settled", "time_to_resolution"]
+        return pd.DataFrame([dict(zip(cols, r)) for r in rows], columns=cols, dtype=str).fillna("")
+
+    d = deals([("a", "A Re Ltd.", "$100m", "Jun 2020", "June 2023", "", "June 2023", "", "issued")])
+    L = losses([("A Re Ltd. (Series 1) Class A", "a", "$100m", "$40m", "Sep 2021", "stated_amount", "40000000.0", "True", "Approx. 18 months")])
+    f_loss = rf.monthly_flows(rf.deal_book(d, L))
+    f_set = rf.monthly_flows(rf.deal_book(d, L, loss_timing="settlement"))
+    check(abs(f_loss.loc["2021-09", "written_down"] - 40.0) < 1e-9 and "2023-03" not in f_loss.index,
+          "UNIT loss timing: default writes down at the loss month", repr(f_loss.written_down.to_dict()))
+    check(abs(f_set.loc["2023-03", "written_down"] - 40.0) < 1e-9 and "2021-09" not in f_set.index,
+          "UNIT loss timing: settlement writes down 18 months later", repr(f_set.written_down.to_dict()))
+    b = rf.deal_book(d, L, loss_timing="settlement")
+    check("loss_timing=settlement:+18m" in b.iloc[0]["flags"], "UNIT loss timing: flagged", b.iloc[0]["flags"])
+    y_loss = rf.outstanding_by_year(f_loss, "2024-08").set_index("year").outstanding
+    y_set = rf.outstanding_by_year(f_set, "2024-08").set_index("year").outstanding
+    check((y_loss[2021], y_loss[2022], y_loss[2023]) == (60.0, 60.0, 0.0) and (y_set[2021], y_set[2022], y_set[2023]) == (100.0, 100.0, 0.0),
+          "UNIT loss timing: the stock holds the amount until settlement", repr((y_loss.to_dict(), y_set.to_dict())))
+    try:
+        rf.deal_book(d, L, loss_timing="never")
+        check(False, "UNIT loss timing: bad value raises")
+    except ValueError:
+        check(True, "UNIT loss timing: bad value raises")
+
+
 def unit_parse_losses():
     """The losses table's derived loss amount, on the cell phrasings the
     2026-11-17 read found mis-derived or underived (synthetic table)."""
@@ -1749,6 +1907,8 @@ def main():
     unit_maturity_class_scoped()
     unit_maturity_recall_round3()
     unit_parse_losses()
+    unit_class_repayment()
+    unit_loss_timing()
     n_unit = len(results)
     if golden:
         unit_registry_rules()       # parses pages; reads data/queue.csv
@@ -2044,7 +2204,7 @@ def main():
     # checks when the separate-series-total rule was pinned (2026-10-21).
     # The tiers are pinned separately so unit checks can be added without
     # touching the golden pin, which has only ever been measured over raw/.
-    EXPECTED_UNIT_CHECKS = 342
+    EXPECTED_UNIT_CHECKS = 378
     EXPECTED_GOLDEN_CHECKS = 1965
     n_golden = len(results) - n_unit
     if n_unit != EXPECTED_UNIT_CHECKS:

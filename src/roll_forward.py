@@ -40,6 +40,26 @@ The bridge is read with --trace-maturities PATH (default: the sibling
 analysis repository's data/bridge.csv when present; --no-trace-maturities
 turns it off, and the module runs without the analysis repository).
 
+Class-level repayment (--cusip-classes PATH, default the sibling repository's
+data/bridge_cusip_classes.csv when present; --no-cusip-classes turns it
+off): where a multi-term deal's bridged CUSIPs carry unanimous holder-title
+class labels that match tranche ids in tranches.csv with USD sizes, each
+labelled class repays its size at its own TRACE month and the unlabelled
+remainder at the majority month (flag maturity_split=class_level:k_of_n
+classes). Class sizes above the deal size by more than 0.5% fall back to
+the whole deal at the majority month (maturity_split=fallback_...). A
+write-down or extension scales every class in proportion.
+
+Loss timing (--loss-timing loss|settlement, default loss): a written-down
+amount leaves at the loss month (the current behaviour), or at the
+settlement month when the row states one -- `time_to_resolution` as "N
+months"/"N years" after the loss, a "paid out in YYYY" or "reduced to zero
+at end of Mon YYYY" phrase, or a dated "redeemed in Mon YYYY" in the loss
+cell -- else at the loss month (flag loss_timing=settlement:+Nm or
+loss_settlement_unknown). The publisher's outstanding chart appears to keep
+extended, loss-affected principal until it is paid, which is what
+`settlement` approximates.
+
 Inputs are the parsed tables under data/ (gitignored). Outputs:
 
     data/outstanding_rollforward.csv   year-end stock, flows, publisher series
@@ -84,6 +104,12 @@ IMPUTED_TERM_MONTHS = {"public": 36, "private": 12}
 # term-derived ones, measured 2026-11-17); beyond it TRACE wins, flagged.
 TRACE_DEFAULT = ROOT.parent / "cat-bond-flow-analysis" / "data" / "bridge.csv"
 TRACE_TOLERANCE_MONTHS = 3
+# The holders' N-PORT titles name a class for 588 bridged CUSIPs (the analysis
+# repository's bridge_cusip_classes.csv). With tranches.csv's per-class sizes
+# that lets a multi-term deal repay class by class at each class's own TRACE
+# month instead of the whole deal at the majority month.
+CLASSES_DEFAULT = ROOT.parent / "cat-bond-flow-analysis" / "data" / "bridge_cusip_classes.csv"
+CLASS_SUM_TOLERANCE = 0.005          # class sizes may exceed the deal size by this before fallback
 
 # An unresolved loss with no stated extension date is carried past its
 # scheduled maturity for at most this long. Cat bond extension provisions
@@ -230,6 +256,97 @@ def resolve_trace_path(arg="auto"):
     return path
 
 
+def resolve_classes_path(arg="auto"):
+    """As resolve_trace_path, for the CUSIP-class file."""
+    if arg in (None, "", "off", "none"):
+        return None
+    if arg == "auto":
+        return CLASSES_DEFAULT if CLASSES_DEFAULT.exists() else None
+    path = Path(arg)
+    if not path.exists():
+        raise FileNotFoundError("CUSIP classes file not found: %s" % path)
+    return path
+
+
+def _norm_class(label):
+    """'Class A-1' / 'A1' / 'a-1' -> 'A1': letters and digits, upper-cased."""
+    s = re.sub(r"(?i)^\s*class\s+", "", str(label or ""))
+    return re.sub(r"[^A-Za-z0-9]", "", s).upper()
+
+
+def load_class_maturities(bridge_path, classes_path):
+    """bridge.csv x bridge_cusip_classes.csv -> one row per (deal_url, class):
+    the class's TRACE month (shared by most of its CUSIPs, latest on a tie),
+    its CUSIP count, and whether its CUSIPs disagree on the month. Only
+    unanimous labels count."""
+    b = pd.read_csv(bridge_path, dtype=str, keep_default_na=False)
+    b = b[(b.deal_url.str.strip() != "") & (b.trace_maturity_date.str.len() >= 7)]
+    c = pd.read_csv(classes_path, dtype=str, keep_default_na=False)
+    c = c[c.unanimous.str.lower().isin(["true", "1", "yes"]) & (c.class_label.str.strip() != "")]
+    j = b.merge(c[["cusip_id", "class_label"]], on="cusip_id", how="inner")
+    j = j.assign(month=j.trace_maturity_date.str[:7], cls=j.class_label.map(_norm_class))
+    rows = []
+    for (url, cls), g in j.groupby(["deal_url", "cls"], sort=False):
+        counts = g.month.value_counts()
+        top = counts[counts == counts.max()].index
+        rows.append({"deal_url": url, "class_label": cls, "class_month": max(top, key=month_index),
+                     "class_cusips": int(len(g)), "class_months_disagree": bool(len(counts) > 1)})
+    return pd.DataFrame(rows, columns=["deal_url", "class_label", "class_month", "class_cusips", "class_months_disagree"])
+
+
+def tranche_sizes_usd(tranches, deals):
+    """tranches.csv -> {deal_slug: {class: usd_m}} for tranches with a label
+    and a size in USD (converted at the issue month like the deal size)."""
+    issue = dict(zip(deals.deal_slug, deals.date_of_issue))
+    out = {}
+    for r in tranches.itertuples(index=False):
+        lab = _norm_class(r.tranche_id)
+        if not lab or not str(r.tranche_size_final or "").strip():
+            continue
+        conv = ns.convert_size(r.tranche_size_final, issue.get(r.deal_slug, ""))
+        if conv["usd_m"] is None:
+            continue
+        out.setdefault(r.deal_slug, {})[lab] = conv["usd_m"]
+    return out
+
+
+SETTLE_MONTHS_RE = re.compile(r"(\d+)\s*months?", re.IGNORECASE)
+SETTLE_YEARS_RE = re.compile(r"\b(one|two|three|four|five|\d+)\s*years?", re.IGNORECASE)
+SETTLE_MONTH_RE = re.compile(
+    r"(?:zero|paid|out|finished|redeemed|matured|delisted|settled)[^.]{0,30}?"
+    r"(?:(?:in|at|by|on|at end of|at the end of)\s+)?(?:end of\s+)?"
+    r"([A-Z][a-z]{2,8})\.?\s*(?:\d{1,2},?\s*)?((?:19|20)\d{2})", re.IGNORECASE)
+SETTLE_YEAR_RE = re.compile(r"(?:paid out|finished|completed|settled|matured)\s+in\s+((?:19|20)\d{2})\b", re.IGNORECASE)
+WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+
+
+def settlement_month(row, lm):
+    """(month, flag) for when a settled loss was paid, from the row's
+    `time_to_resolution` and loss cell; (lm, 'loss_settlement_unknown') when
+    neither says. `lm` is the loss month the row otherwise uses."""
+    ttr = str(getattr(row, "time_to_resolution", "") or "")
+    text = str(getattr(row, "loss_amount", "") or "")
+    for src in (ttr, text):
+        m = SETTLE_MONTH_RE.search(src)
+        if m:
+            mon = ns.issue_month("%s %s" % (m.group(1)[:3], m.group(2)))
+            if mon:
+                return mon, "loss_timing=settlement:dated"
+    m = SETTLE_MONTHS_RE.search(ttr)
+    if m and lm:
+        n = int(m.group(1))
+        return add_months(lm, n), "loss_timing=settlement:+%dm" % n
+    m = SETTLE_YEARS_RE.search(ttr)
+    if m and lm:
+        n = WORDS.get(m.group(1).lower()) or int(m.group(1))
+        return add_months(lm, 12 * n), "loss_timing=settlement:+%dm" % (12 * n)
+    for src in (ttr, text):
+        m = SETTLE_YEAR_RE.search(src)
+        if m:
+            return "%s-12" % m.group(1), "loss_timing=settlement:year"
+    return lm, "loss_settlement_unknown"
+
+
 # ------------------------------------------------------------- the book ----
 def _amount_m(num_text, unit):
     n = _money_to_number("$%s%s" % (num_text, unit or ""))
@@ -254,7 +371,8 @@ def vintage_terms(book):
 
 def deal_book(deals, losses, as_of=AS_OF, term_months=IMPUTED_TERM_MONTHS,
               extension_cap=EXTENSION_CAP_MONTHS, trace=None,
-              trace_tolerance=TRACE_TOLERANCE_MONTHS):
+              trace_tolerance=TRACE_TOLERANCE_MONTHS, classes=None, tranches=None,
+              loss_timing="loss"):
     """One row per deal with everything the roll-forward needs.
 
     Columns: slug, issuer_name, issue_month, size_m (USD), maturity_month,
@@ -272,7 +390,12 @@ def deal_book(deals, losses, as_of=AS_OF, term_months=IMPUTED_TERM_MONTHS,
     issue date is in the book and a non-"issued" status is only flagged (the
     five "cancelled" statuses that were a withdrawn sibling series or tranche
     read "issued" since 2026-11-17).
+    `classes` (from `load_class_maturities`) with `tranches` (tranches.csv)
+    turn on class-level repayment for multi-term deals; `loss_timing` is
+    "loss" or "settlement" (module docstring).
     """
+    if loss_timing not in ("loss", "settlement"):
+        raise ValueError("loss_timing must be 'loss' or 'settlement'")
     conv = [ns.convert_size(s, d) for s, d in zip(deals["size"], deals.date_of_issue)]
     book = pd.DataFrame({
         "slug": deals.deal_slug.values,
@@ -293,9 +416,15 @@ def deal_book(deals, losses, as_of=AS_OF, term_months=IMPUTED_TERM_MONTHS,
     if trace is not None and len(trace) and "deal_url" in deals.columns:
         trace_by_url = {r.deal_url: r for r in trace.itertuples(index=False)}
     urls = deals["deal_url"].values if "deal_url" in deals.columns else [None] * len(deals)
-    src, mat, flags, page_src, page_mat, trace_mat, trace_diff = [], [], [], [], [], [], []
+    class_months = {}
+    if classes is not None and len(classes):
+        for r in classes.itertuples(index=False):
+            class_months.setdefault(r.deal_url, {})[r.class_label] = (r.class_month, bool(r.class_months_disagree), int(r.class_cusips))
+    sizes_by_slug = tranche_sizes_usd(tranches, deals) if (tranches is not None and classes is not None) else {}
+    src, mat, flags, page_src, page_mat, trace_mat, trace_diff, distinct, splits = [], [], [], [], [], [], [], [], []
     for i in range(len(book)):
         f = []
+        split = None
         im = book.issue_month.iat[i]
         m = sched.iat[i]
         s = None
@@ -347,8 +476,15 @@ def deal_book(deals, losses, as_of=AS_OF, term_months=IMPUTED_TERM_MONTHS,
             m = add_months(im, tm) if im else None
         if book.status.iat[i] != "issued":
             f.append("deal_status_%s_ignored" % book.status.iat[i])
+        # Class-level repayment for a multi-term deal whose maturity is TRACE's.
+        if s == "trace" and tr is not None and tr.trace_distinct_months > 1 and classes is not None:
+            split, split_flag = class_split(class_months.get(urls[i], {}), sizes_by_slug.get(book.slug.iat[i], {}),
+                                            book.size_m.iat[i], m, tr.trace_cusips)
+            f.append(split_flag)
         src.append(s); mat.append(m); flags.append(f)
+        distinct.append(tr.trace_distinct_months if tr is not None else None); splits.append(split)
     book["maturity_month"] = mat
+    book["trace_distinct_months"] = distinct
     book["maturity_source"] = src
     book["page_maturity_month"] = page_mat
     book["page_maturity_source"] = page_src
@@ -365,6 +501,9 @@ def deal_book(deals, losses, as_of=AS_OF, term_months=IMPUTED_TERM_MONTHS,
         if imputed:
             fl.add("loss_month_imputed")
         text = str(r.loss_amount or "")
+        if loss_timing == "settlement" and lm and r.is_settled == "True" and str(r.loss_amount_derived).strip():
+            lm, tflag = settlement_month(r, lm)
+            fl.add(tflag)
         if r.is_settled == "True" and str(r.loss_amount_derived).strip():
             w = float(r.loss_amount_derived) / 1e6
             ccy = _currency(str(r.orig_size or ""))
@@ -450,8 +589,59 @@ def deal_book(deals, losses, as_of=AS_OF, term_months=IMPUTED_TERM_MONTHS,
     book["flags"] = [";".join(sorted(set(f) | lflags.get(s, set())
                                      | ({"repay_after_maturity_loss_settlement"} if rp != m else set())))
                      for f, s, rp, m in zip(flags, book.slug, book.repay_month, book.maturity_month)]
-    book["events"] = [{"wd": wd.get(s, []), "rec": rec.get(s, [])} for s in book.slug]
+    # Class-level repayment: each labelled class leaves at its own month,
+    # scaled with the deal's remainder (a write-down or extension takes its
+    # share from every class); the unlabelled rest at the deal's repay month.
+    # A class month before the last settled loss is pushed to it, like the
+    # deal's repay month.
+    class_repay = []
+    for slug, size, rem, rp, sp in zip(book.slug, book.size_m, book.remainder_m, book.repay_month, splits):
+        if not sp or not size or rem <= 0:
+            class_repay.append([]); continue
+        factor = rem / size
+        events = []
+        for cls, month, amt in sp:
+            mo = month
+            if slug in last_loss and month_index(last_loss[slug]) > month_index(mo):
+                mo = last_loss[slug]
+            events.append((cls, mo, amt * factor))
+        class_repay.append(events)
+    book["class_repay"] = class_repay
+    book["events"] = [{"wd": wd.get(s, []), "rec": rec.get(s, []), "cls": [(m, a) for _, m, a in c]}
+                      for s, c in zip(book.slug, class_repay)]
     return book
+
+
+def class_split(classes_for_deal, sizes_for_deal, size_m, majority_month, trace_cusips):
+    """[(class, month, usd_m)] for the labelled classes with a USD size, and
+    the flag describing the path taken; ([] , flag) when the deal stays whole.
+
+    `classes_for_deal`: {class: (month, months_disagree[, cusips])} from the
+    holders' titles; `sizes_for_deal`: {class: usd_m} from tranches.csv.
+    """
+    if not size_m or not classes_for_deal:
+        return [], "maturity_split=majority_no_class_labels"
+    info = {c: (v[0], v[1], v[2] if len(v) > 2 else 1) for c, v in classes_for_deal.items()}
+    labelled_cusips = sum(n for _, _, n in info.values())
+    matched = [(c, mo, sizes_for_deal[c]) for c, (mo, _dis, _n) in sorted(info.items())
+               if c in sizes_for_deal and sizes_for_deal[c]]
+    if not matched:
+        return [], "maturity_split=majority_no_class_size_match"
+    total = sum(a for _, _, a in matched)
+    if total > size_m * (1 + CLASS_SUM_TOLERANCE):
+        return [], "maturity_split=fallback_class_sizes_exceed_deal:%.0f_of_%.0f" % (total, size_m)
+    if total > size_m:                       # within tolerance: the deal size is the cap
+        matched = [(c, mo, a * size_m / total) for c, mo, a in matched]
+    # Classes that all mature at the majority month add nothing; keep only
+    # the ones that leave at a different month, the rest stay in the
+    # remainder which already leaves at the majority month.
+    off = [(c, mo, a) for c, mo, a in matched if mo != majority_month]
+    disagree = [c for c, (mo, dis, _n) in info.items() if dis]
+    flag = "maturity_split=class_level:%d_of_%d_classes%s" % (
+        len(matched), len(info), "_unlabelled_remainder" if labelled_cusips < trace_cusips or total < size_m * (1 - CLASS_SUM_TOLERANCE) else "")
+    if disagree:
+        flag += ";class_months_disagree=%s" % ",".join(sorted(disagree))
+    return off, flag
 
 
 def monthly_flows(book, unlinked_losses=None):
@@ -473,8 +663,12 @@ def monthly_flows(book, unlinked_losses=None):
         over = sum(a for _, a in r.events["rec"]) - r.recovered_m
         if over > 1e-9:
             rows.append((r.events["rec"][-1][0], "recovered", -over))
-        if r.repay_month and r.remainder_m > 0:
-            rows.append((r.repay_month, "repaid", r.remainder_m))
+        cls = r.events.get("cls", []) if isinstance(r.events, dict) else []
+        cls_total = sum(a for _, a in cls)
+        for mo, a in cls:
+            rows.append((mo, "repaid", a))
+        if r.repay_month and r.remainder_m - cls_total > 1e-9:
+            rows.append((r.repay_month, "repaid", r.remainder_m - cls_total))
         if r.extension_month and r.extended_m > 0:
             rows.append((r.extension_month, "repaid_after_extension", r.extended_m))
     if unlinked_losses is not None:
@@ -530,8 +724,11 @@ def upcoming_maturities(book, as_of=AS_OF):
     rows = []
     for r in book.itertuples(index=False):
         carried_open = "extension_open" in (r.flags or "") and "extended_to_stated_date" not in (r.flags or "")
-        for month, amt, kind in ((r.repay_month, r.remainder_m, "scheduled"),
-                                 (r.extension_month, r.extended_m, "carried_open" if carried_open else "extended_stated")):
+        cls = r.events.get("cls", []) if isinstance(r.events, dict) else []
+        cls_total = sum(a for _, a in cls)
+        for month, amt, kind in ([(mo, a, "scheduled") for mo, a in cls]
+                                 + [(r.repay_month, r.remainder_m - cls_total, "scheduled"),
+                                    (r.extension_month, r.extended_m, "carried_open" if carried_open else "extended_stated")]):
             if month and amt and month_index(month) > month_index(as_of):
                 y, m = month.split("-")
                 rows.append(("Q%d %s" % ((int(m) - 1) // 3 + 1, y), month, amt, kind))
@@ -600,18 +797,27 @@ def select_book(book, exclude_mortgage=True):
     return out
 
 
-def build(as_of=AS_OF, exclude_mortgage=True, impute="flat", trace_path="auto"):
+def build(as_of=AS_OF, exclude_mortgage=True, impute="flat", trace_path="auto", classes_path="auto",
+          loss_timing="loss"):
     """`trace_path`: 'auto' (the sibling repository's bridge when present),
-    None to run without TRACE maturities, or a path."""
+    None to run without TRACE maturities, or a path. `classes_path` the same
+    for the CUSIP-class file (needs the bridge too). `loss_timing`: 'loss'
+    or 'settlement'."""
     deals = pd.read_csv(ROOT / "data" / "deals.csv", keep_default_na=False, dtype=str)
     losses = link_losses(pd.read_csv(ROOT / "data" / "losses.csv", keep_default_na=False, dtype=str), deals)
     path = resolve_trace_path(trace_path)
     trace = load_trace_maturities(path) if path else None
-    book = deal_book(deals, losses, as_of, trace=trace)
+    cpath = resolve_classes_path(classes_path) if path else None
+    classes = load_class_maturities(path, cpath) if cpath else None
+    tranches = pd.read_csv(ROOT / "data" / "tranches.csv", keep_default_na=False, dtype=str) if cpath else None
+    kw = dict(trace=trace, classes=classes, tranches=tranches, loss_timing=loss_timing)
+    book = deal_book(deals, losses, as_of, **kw)
     if impute == "vintage":
         terms = {"public": vintage_terms(book), "private": IMPUTED_TERM_MONTHS["private"]}
-        book = deal_book(deals, losses, as_of, term_months=terms, trace=trace)
+        book = deal_book(deals, losses, as_of, term_months=terms, **kw)
     book.attrs["trace_path"] = str(path) if path else None
+    book.attrs["classes_path"] = str(cpath) if cpath else None
+    book.attrs["loss_timing"] = loss_timing
     book = select_book(book, exclude_mortgage)
     unlinked = losses[losses.link_method == "unlinked"]
     flows = monthly_flows(book, unlinked)
@@ -659,9 +865,18 @@ def main():
                          "trace_maturity_date); default: %s when it exists" % TRACE_DEFAULT)
     ap.add_argument("--no-trace-maturities", action="store_true",
                     help="run on page maturities and imputation alone")
+    ap.add_argument("--cusip-classes", default="auto", metavar="PATH",
+                    help="the analysis repository's bridge_cusip_classes.csv (cusip_id, class_label, "
+                         "unanimous) for class-level repayment; default: %s when it exists" % CLASSES_DEFAULT)
+    ap.add_argument("--no-cusip-classes", action="store_true", help="repay every deal whole at its majority month")
+    ap.add_argument("--loss-timing", choices=("loss", "settlement"), default="loss",
+                    help="write a settled loss down at the loss month (default) or at the settlement month")
+    ap.add_argument("--no-write", action="store_true", help="print the comparison, write no files")
     args = ap.parse_args()
     trace_path = None if args.no_trace_maturities else args.trace_maturities
-    book, losses, flows = build(args.as_of, exclude_mortgage=True, impute=args.impute, trace_path=trace_path)
+    classes_path = None if args.no_cusip_classes else args.cusip_classes
+    book, losses, flows = build(args.as_of, exclude_mortgage=True, impute=args.impute, trace_path=trace_path,
+                                classes_path=classes_path, loss_timing=args.loss_timing)
     yearly = outstanding_by_year(flows, args.as_of)
     theirs = ns.dashboard_series()[["year", "artemis_issued", "artemis_outstanding"]]
     cmpd = yearly.merge(theirs, on="year", how="left")
@@ -684,6 +899,7 @@ def main():
         print(tc.groupby(["page_source", "outcome"]).agg(n_deals=("n_deals", "sum"), usd_m=("usd_m", "sum")).round(0).to_string())
     else:
         print("TRACE maturities: off")
+    print("CUSIP classes: %s; loss timing: %s" % (book.attrs.get("classes_path") or "off", book.attrs.get("loss_timing")))
     print("loss rows: %s" % losses.link_method.value_counts().to_dict())
     lk = losses[losses.is_settled == "True"].assign(m=lambda d: pd.to_numeric(d.loss_amount_derived, errors="coerce") / 1e6).groupby("link_method").m.sum().round(0).to_dict()
     print("settled written-down $m by link method: %s" % lk)
@@ -698,8 +914,21 @@ def main():
     print(book["flags"].str.split(";").explode().replace("", pd.NA).dropna().value_counts().to_string())
 
     OUT.mkdir(exist_ok=True); DASH_OUT.mkdir(exist_ok=True)
+    if args.no_write:
+        up = upcoming_maturities(book, args.as_of)
+        q = up.pivot_table(index="quarter", columns="kind", values="m", aggfunc="sum").fillna(0.0)
+        for c in ("scheduled", "extended_stated", "carried_open"):
+            if c not in q.columns:
+                q[c] = 0.0
+        mat = publisher_maturities().merge(q.reset_index(), on="quarter", how="inner").fillna(0.0)
+        mat["diff_m"] = mat.scheduled + mat.extended_stated - mat.artemis_maturing_m
+        print("\nupcoming maturities (no files written): window total publisher %.0f, ours %.0f; mean |quarterly diff| %.0f"
+              % (mat.artemis_maturing_m.sum(), (mat.scheduled + mat.extended_stated).sum(), mat.diff_m.abs().mean()))
+        return
     cmpd.to_csv(OUT / "outstanding_rollforward.csv", index=False)
-    book.drop(columns=["events"]).to_csv(OUT / "outstanding_deals.csv", index=False)
+    book.drop(columns=["events", "class_repay"]).assign(
+        class_repay=[";".join("%s@%s=%.3f" % (c, m, a) for c, m, a in cr) for cr in book.class_repay]
+    ).to_csv(OUT / "outstanding_deals.csv", index=False)
     tracked = cmpd[["year", "measured_at", "issued", "artemis_issued", "written_down", "recovered", "repaid",
                     "repaid_after_extension", "carried_open_m", "outstanding", "artemis_outstanding",
                     "outstanding_diff", "legacy_3y", "legacy_gap", "no_netting", "netted",
