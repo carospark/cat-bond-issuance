@@ -3,6 +3,112 @@
 Read `PARSER_BACKLOG.md` first. It is the current state: what is parsed, what
 is validated, and everything still worth fixing, ordered by value per hour.
 
+## Checkpoint (2026-11-17, night): class-level repayment; loss timing as an option
+
+Two more roll-forward items (`src/roll_forward.py`). Tests 2307 -> **2343**
+(342 -> 378 unit; golden pin 1965). Dashboards regenerated on the default
+settings; the committed numbers below are the defaults.
+
+Class-level repayment (`--cusip-classes PATH`, default the analysis
+repository's `data/bridge_cusip_classes.csv` when present;
+`--no-cusip-classes` off). `load_class_maturities` joins the bridge's
+TRACE maturity per CUSIP with the holders' unanimous class label (588
+CUSIPs, 391 deals) into one TRACE month per (deal, class), the month shared
+by most of the class's CUSIPs, latest on a tie, flag
+`class_months_disagree=<classes>` when they differ. `tranche_sizes_usd`
+reads tranches.csv's per-class sizes through the same USD conversion as
+the deal size. For a multi-term deal whose maturity is TRACE's
+(`trace_maturity_tranches_disagree`), `class_split` repays each labelled
+class with a USD size at its own month and the rest at the majority month
+(`maturity_split=class_level:k_of_n_classes`, with
+`_unlabelled_remainder` when a bridged CUSIP has no label or the sizes do
+not reach the deal size). Guards: class sizes above the deal size by more
+than 0.5% fall back to the whole deal at the majority month
+(`maturity_split=fallback_class_sizes_exceed_deal:X_of_Y`); within 0.5%
+they are capped to it; no labels -> `majority_no_class_labels`; labels
+with no matching sized tranche -> `majority_no_class_size_match`. A
+write-down or extension scales every class in proportion to the deal's
+remainder, and a class month before the last settled loss moves to it,
+as the deal's repay month does. Classes maturing at the majority month add
+nothing and stay in the remainder. `outstanding_deals.csv` carries the
+events in `class_repay` ("B1@2028-04=100.000"); `monthly_flows` and
+`upcoming_maturities` emit them. Labels are normalised to letters and
+digits ("Class A-1" = "A1").
+
+Of the 54 multi-term deals in the book: 24 take the class path (19 with a
+class off the majority month, 22 class events; 5 whose labelled classes
+all sit at the majority month), 24 have no class label in any holder
+title (Residential Re's numbered classes, the pre-2010 programmes), 1 has
+labels but no sized tranche of that name, 5 keep the page's stated date
+and are not split. The class events: Caelus Re VI 2020-1/2 B1 $92m at
+2024-06 (scaled by its write-down), Sanders Re II 2025-1 B1 $100m at
+2028-04, Sanders III 2026-1B and IV 2026-1A $275m each at 2030-04, Mona
+Lisa 2025-1 B $175m at 2028-01, Galileo 2023-1 B $175m at 2026-01, Alamo
+2024-1 C $400m at 2026-06, Ursa Re II 2025-2 F/G $500m at 2028-06, and
+the rest.
+
+| ($m, ex-mortgage) | whole deal at majority month | class-level (now default) |
+|---|---:|---:|
+| outstanding minus publisher 2023 | -757 | -840 |
+| 2024 | +1,020 | +960 |
+| 2025 | +2,274 | +2,012 |
+| 2026 (at 2026-08) | +4,791 | +3,916 |
+| 2019-2022 | unchanged | unchanged |
+| mean absolute gap 2010-2026 | 959 | 894 |
+| upcoming maturities, mean absolute quarterly difference | 630 | 581 |
+| upcoming maturities, window total (publisher 62,372) | 65,751 | 65,426 |
+
+Loss timing (`--loss-timing loss|settlement`, default `loss`, the
+behaviour to date). Under `settlement`, `settlement_month` places a
+settled write-down at the month the row says it was paid: a "N months" or
+"N years" `time_to_resolution` after the loss month
+(`loss_timing=settlement:+Nm`); a dated phrase in either cell, "principal
+reduced to zero at end of Feb 2023", "notes delisted with zero balance
+Mar. 2019", "redeemed in April 2026" (`:dated`); "paid out in 2020" /
+"loss payments finished in 2020" to that December (`:year`); else the loss
+month, flagged `loss_settlement_unknown`. Of the 83 settled, linked,
+amount-bearing rows, 36 get a settlement month and 47 do not ("Ongoing",
+"?", weeks-long resolutions, no statement). `build(loss_timing=...)` and
+the CLI pass it through; `--no-write` prints the comparison without
+touching the dashboards, which is how the settlement column below was
+produced. Nothing else changes under either setting.
+
+| year | loss (default) | settlement |
+|---|---:|---:|
+| 2010 | -455 | +140 |
+| 2011 | -202 | +1,214 |
+| 2012 | -372 | +338 |
+| 2013 | -707 | -311 |
+| 2014 | -249 | +56 |
+| 2015 | +818 | +818 |
+| 2016 | +452 | +967 |
+| 2017 | -1,014 | -248 |
+| 2018 | -1,510 | -141 |
+| 2019 | -347 | +832 |
+| 2020 | -24 | +390 |
+| 2021 | -706 | -15 |
+| 2022 | +612 | +1,046 |
+| 2023 | -840 | -602 |
+| 2024 | +960 | +1,207 |
+| 2025 | +2,012 | +2,259 |
+| 2026 | +3,916 | +3,916 |
+| mean absolute gap 2010-2026 | 894 | 853 |
+
+Reading it: settlement timing closes the 2017-2021 gaps the losses read
+opened (Frontline, Caelus, Residential Re principal held until paid) and
+moves the stock above the publisher in 2010-2012 and 2019-2020, where
+the publisher evidently removed those losses earlier than the resolution
+column says they settled. Neither setting is uniformly closer; the choice
+is Caro's, and the default stays `loss`. The two runs are reproducible
+with `python src/roll_forward.py --no-write` and `--loss-timing
+settlement --no-write`.
+
+Left open: the 24 multi-term deals with no holder-title class labels
+(Residential Re's numbered classes above all; the N-PORT titles for those
+name "Class 11" etc. only on some filings, so the labels file could be
+extended on the analysis side with a non-unanimous majority rule); the
+loss-timing choice; the 47 settled rows with no settlement statement.
+
 ## Checkpoint (2026-11-17, evening): the losses table's derived amounts
 
 The analysis repository's read of the fund-mark outliers named eight

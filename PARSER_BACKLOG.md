@@ -135,16 +135,31 @@ CLASS's term on a multi-class page. Result: 354 stated maturities,
   class read as the term), Sanders III 2022-3 "April 2023" and Bonanza
   2023-1 "January 2024" (multiple candidates, the earlier picked).
 
+## 3b. Multi-term deals: class-level repayment — done 2026-11-17 for 24 of 54
+
+The roll-forward repays a multi-term deal class by class where the
+holders' N-PORT titles label its bridged CUSIPs (analysis repo
+`bridge_cusip_classes.csv`) and tranches.csv has a USD size for that class
+(HANDOFF night checkpoint; `--cusip-classes`). Open: 24 of the 54
+multi-term deals have no class label in any title, Residential Re's
+numbered classes above all, so they still leave whole at the majority
+month; a non-unanimous majority label on the analysis side, or the
+tranche's own TRACE CUSIP read from the page (never stated), would extend
+it. One deal (labels present, no sized tranche of that name) and the
+`_unlabelled_remainder` cases are listed by flag in outstanding_deals.csv.
+
 ## 4. Lifecycle extractor breadth — measured 2026-09-15, still thin
 
 2026-11-17: `losses.csv` derived amounts re-read (HANDOFF "the losses
 table's derived amounts"): 12 rows corrected, $5.13bn -> $5.63bn settled.
 Open from that read: (a) loss TIMING -- the ledger writes a loss down at
 the loss month (December when the table gives a year) while the publisher's
-outstanding chart keeps extended principal until it is paid or redeemed;
-a `--loss-timing settlement` option using `time_to_resolution` and the
-extension dates would let the two be compared like for like (the
-2017-2021 gaps of -0.3 to -1.5bn are this); (b) "Loss payments reduced by
+outstanding chart keeps extended principal until it is paid or redeemed.
+DONE as an option 2026-11-17 (night checkpoint): `--loss-timing
+settlement` reads `time_to_resolution` and dated phrases, 36 of 83 settled
+rows get a settlement month; mean absolute gap 894 (loss) vs 853
+(settlement), 2017-2021 closes, 2010-2012 and 2019-2020 open. The default
+stays `loss`; the choice is open. (b) "Loss payments reduced by
 wildfire subrogation" (Residential Re 2015-1 Class 10) has no amount in
 the table but the page says "reduced by almost half to $26,511,039", the
 one case where the page beats the table; (c) FloodSmart Re 2021-1 and
