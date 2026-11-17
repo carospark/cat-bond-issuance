@@ -1008,7 +1008,7 @@ def unit_predicates():
 from parse_deal import (_each_scoped, LABELLED_NOTES_RE, COUNTED_TRANCHES_RE,  # noqa: E402
                         TRANCHE_PRONOUN_RE, AGGREGATE_RE, PREDECESSOR_ANAPHORA_RE,
                         sentences, _is_backward_reference, INITIAL_IDIOM_RE,
-                        _spread_is_price, TIER2_PATTERNS, MATURITY_EXCLUDE_RE, _strip_day,
+                        _spread_is_price, TIER2_PATTERNS, MATURITY_EXCLUDE_RE, _strip_day, _term_to_years,
                         _series_tokens, LC_ZERO_RE, LC_SPECULATIVE_RE, _bindings_by_label,
                         TRANCHE_DROPPED_RE, _per_tranche_amount, TRANCHE_WITHDRAWN_RE, CLASS_STOPWORDS)
 from mentions import extract as mentions_extract  # noqa: E402
@@ -1371,10 +1371,12 @@ def unit_component_scope():
     check(any(x.startswith("discount_price_not_spread") for x in f["flags"]),
           "UNIT spread: dropped price is flagged", repr(f["flags"]))
     for text, want in [
-        ("have had their maturity extended again to December 6th 2018.", True),
         ("cat bond expires at the end of Dec 2009 so this deal seeks to replace it.", True),
         ("It will be a three year deal due to end in June 2013.", False),
         ("The risk period runs through March 31st, 2001.", False),
+        # The extension veto moved out of this regex and became positional
+        # (2026-11-17): see unit_maturity_recall_round3.
+        ("have had their maturity extended again to December 6th 2018.", False),
     ]:
         got = bool(MATURITY_EXCLUDE_RE.search(text))
         check(got == want, f"UNIT maturity-exclude {text[:36]!r}", f"want={want} got={got}")
@@ -1464,15 +1466,19 @@ def unit_maturity_class_scoped():
     v, _ = mat("Class A notes are due March 2028 and Class B notes are due March 2030.")
     check(v is None, "UNIT class-maturity disagree within one sentence", repr(v))
 
-    # A single class-scoped maturity is one class's term, not the deal's.
+    # A single class-scoped maturity is one class's term, not the deal's,
+    # when the page has other tranches ("the other two"). Since 2026-11-17 a
+    # page whose ONLY class states the date adopts it, flagged; the plural
+    # here is the guard that keeps this one out.
     v, _ = mat("The riskier Class 11 tranche has protection to the end of May 2025, "
-               "while the other two run longer.")
+               "while the other two tranches run longer.")
     check(v is None, "UNIT class-maturity single class -> no deal-level value", repr(v))
-    v, _ = mat("The Class A notes due March 2028.")
-    check(v is None, "UNIT class-maturity single class, 'notes due'", repr(v))
-    # Same class stated twice is still one class.
+    v, fl = mat("The Class A notes due March 2028.")
+    check(v == "March 2028" and "maturity_from_single_class=A" in fl,
+          "UNIT class-maturity single class, 'notes due' (one-class page adopts)", repr((v, fl)))
+    # Same class stated twice is still one class, and a one-class page.
     v, _ = mat("Class A notes due March 2028. The Class A notes mature in March 2028.")
-    check(v is None, "UNIT class-maturity one class stated twice", repr(v))
+    check(v == "March 2028", "UNIT class-maturity one class stated twice", repr(v))
 
     # A class with no date beside a dated class: not evidence of agreement.
     v, _ = mat("Class A notes due March 2028, while the Class B notes are floating rate.")
@@ -1496,6 +1502,132 @@ def unit_maturity_class_scoped():
     v, _ = mat("Class A notes due March 2019. Class B notes due March 2019.",
                issue_year=2024)
     check(v is None, "UNIT class-maturity backward reference excluded", repr(v))
+
+
+def unit_maturity_recall_round3():
+    """Recall round 2026-11-17 (backlog 3): the single-class rule, the
+    series-scoped veto, the positional extension veto, "April, 2015", the
+    "running from X to Y" maturity, and the term phrasings read from the
+    audit-sample deals the earlier patterns missed. Synthetic sentences that
+    quote the pages."""
+    def mat(text, own=frozenset(), issue_year=None):
+        f = _apply_patterns("maturity_date", TIER2_PATTERNS["maturity_date"], text,
+                            issue_year, own)
+        return f["value"], f["flags"]
+
+    def term(text):
+        return _apply_patterns("term_length", TIER2_PATTERNS["term_length"], text)["value"]
+
+    # (a) single-tranche class vote (Herbie Re 2025-1).
+    herbie = ("Fidelis is aiming to secure at least $75 million of retrocessional protection "
+              "through the issuance of a single tranche of Series 2025-1 cat bond notes. The "
+              "single tranche of Class A notes will provide retro reinsurance protection across "
+              "a two-year term and two annual risk periods to the end of May 2027, sources told us.")
+    v, fl = mat(herbie, frozenset({"2025-1"}))
+    check(v == "May 2027" and "maturity_from_single_class=A" in fl,
+          "UNIT single-class page adopts its one class's maturity", repr((v, fl)))
+    # A second class label, undated, blocks it: that tranche's term is unknown.
+    v, _ = mat(herbie + " The Class B notes are floating rate.", frozenset({"2025-1"}))
+    check(v is None, "UNIT single-class rule needs exactly one label on the page", repr(v))
+    # A stated count above one blocks it.
+    v, _ = mat("Two tranches of notes are on offer. The Class A notes due March 2028.")
+    check(v is None, "UNIT single-class rule blocked by a stated count of two", repr(v))
+    # A sibling deal's sentence does not count against the page.
+    v, _ = mat("The Class A notes due March 2028. The 2024-1 deal had three tranches.",
+               frozenset({"2025-1"}))
+    check(v == "March 2028", "UNIT single-class rule ignores a sibling's plural", repr(v))
+
+    # (b) series-scoped veto on a multi-series page (Isosceles 2023-A/C/G).
+    iso = ("$20.7m Series 2023-A Class A notes due May 10, 2024. $27.15955 million Series "
+           "2023-C notes due June 7, 2024. $3.65625 million Series 2023-G Class E notes due "
+           "June 7, 2024.")
+    v, fl = mat(iso, frozenset({"2023-A", "2023-C", "2023-G"}))
+    check(v is None, "UNIT series-scoped date on a multi-series page is vetoed", repr((v, fl)))
+    # Series that agree vote like classes do.
+    v, fl = mat("The Series 2023-1 notes mature in June 2026. The Series 2023-2 notes mature "
+                "in June 2026.", frozenset({"2023-1", "2023-2"}))
+    check(v == "June 2026" and any("class_agreement" in str(x) for x in fl),
+          "UNIT agreeing series on a multi-series page adopt", repr((v, fl)))
+    # On a single-series page a sentence naming the series is deal-level.
+    v, _ = mat("The Series 2023-1 notes mature in June 2026.", frozenset({"2023-1"}))
+    check(v == "June 2026", "UNIT series mention on a one-series page is deal-level", repr(v))
+
+    # Positional extension veto (Blue Fin Series 3 vs Residential Re 2014-1).
+    v, _ = mat("The deal is due to run until May 2013 with the possibility to extend in three "
+               "month increments to allow for loss development and reporting.")
+    check(v == "May 2013", "UNIT extension AFTER the date does not veto it", repr(v))
+    v, _ = mat("The notes have had their maturity extended again to December 6th 2018.")
+    check(v is None, "UNIT extension BEFORE the date vetoes it", repr(v))
+    v, _ = mat("The notes had already had their maturity extended through to January 2027, "
+               "but the reinsurer elected an early redemption at the end of 2025.")
+    check(v is None, "UNIT 'extended through to' vetoed (Matterhorn 2020-2)", repr(v))
+
+    # "April, 2015" (Mythen 2012-1): three classes agree.
+    v, fl = mat("$50m Series 2012-1 Class A Notes due April, 2015. $100m Series 2012-1 Class E "
+                "Notes due April, 2015. $250m Series 2012-1 Class H Notes due April, 2015.",
+                frozenset({"2012-1"}))
+    check(v == "April 2015", "UNIT 'April, 2015' reads as April 2015 across classes", repr((v, fl)))
+    check(_strip_day("April, 2015") == "April 2015", "UNIT strip-day drops a bare comma")
+
+    # "running from June 2017 to the end of December 2019" (Bonanza 2016-1).
+    v, _ = mat("The term of the coverage would be two and a half years, running from June 2017 "
+               "to the end of December 2019.")
+    check(v == "December 2019", "UNIT 'running from X to the end of Y' reads Y", repr(v))
+    v, _ = mat("designed to provide SCOR with fully collateralized cover on an annual-aggregate "
+               "basis for European windstorms and Japanese earthquakes from December 2010 until "
+               "April 2014.")
+    check(v == "April 2014", "UNIT 'cover ... from X until Y' reads Y (Atlas VI 2010-1)", repr(v))
+    v, _ = mat("the reinsurance it provides will cover a portfolio of existing mortgage insurance "
+               "policies that have been underwritten from January 2019 through September 2019.")
+    check(v is None, "UNIT an origination window is not a maturity (Triangle Re 2019-1)", repr(v))
+    v, _ = mat("reinsurance protection, covering an existing portfolio of mortgage insurance "
+               "policies written primarily from April 1, 2021 through September 30, 2021.")
+    check(v is None, "UNIT a policy window is not a maturity (Oaktown Re VII)", repr(v))
+    v, _ = mat("Covered mortgage loans have an effective date from January 1st 2021 to May 28th "
+               "2021, with the pool made up of 181,727 mortgage loans.")
+    check(v is None, "UNIT a loan effective-date window is not a maturity (Home Re 2021-2)", repr(v))
+    # Slug tokens that are not series ids must not make a one-series page
+    # look multi-series (Residential Re 2011-2's "2011-L", Vision 2039's
+    # "2039-2025").
+    v, _ = mat("This Series 2011-2 issuance will provide USAA with cover, scheduled to run for "
+               "just over four years with maturity slated for 6th December 2015.",
+               _series_tokens("Residential Reinsurance 2011 Ltd. (Series 2011-2)")
+               | _series_tokens("https://www.artemis.bm/deal-directory/residential-reinsurance-2011-ltd-series-2011-2/"))
+    check(v == "December 2015", "UNIT a non-series slug token is not a second series", repr(v))
+    v, _ = mat("The Vision 2039 - Series 2025-1 notes will provide Flood Re with three years of "
+               "retrocessional UK flood reinsurance to the end of March 2028.",
+               frozenset({"2039-2025", "2025-1"}))
+    check(v == "March 2028", "UNIT 'Vision 2039 - 2025-1' is one series", repr(v))
+    check("2011-L" not in _series_tokens("residential-reinsurance-2011-ltd-series-2011-2"),
+          "UNIT slug '2011-ltd' is not a letter series")
+    check(_series_tokens("isosceles-insurance-ltd-series-2023-a-c-g") >= {"2023-A", "2023-C", "2023-G"},
+          "UNIT letter-series slug still enumerates")
+    check("2020-C1" in _series_tokens("Isosceles Insurance Ltd. (Series 2020-C1)")
+          and "2020-A1" in _series_tokens("a $16.5 million Isosceles Insurance Ltd. (Series 2020-A1) arrangement"),
+          "UNIT letter-plus-digit series ids are tokens")
+    check("2020-X" not in _series_tokens("segregated account Randolph Re 2020-XX"),
+          "UNIT '2020-XX' placeholder is not a series")
+    check(term("provide coverage across the Atlantic hurricane season of 2016") is None,
+          "UNIT 'Atlantic hurricane season' is not a term")
+
+    # Term phrasings.
+    for text, want in [
+        ("a source of parametric cover for earthquakes in Mexico over a three-year period", "three-year"),
+        ("This $200m, 3 year deal has been issued by Atlas Reinsurance V Ltd.", "3 year"),
+        ("This three year deal comprises two tranches.", "three year"),
+        ("This $180m issue will provide three years of cover for U.S. windstorm", "three years"),
+        ("will provide three years of coverage for calendar years 2026 through 2028", "three years"),
+        ("seeking three years of both annual aggregate and per-occurrence retrocessional "
+         "reinsurance protection", "three years"),
+        ("will provide Kin with a three hurricane season source of reinsurance", "three hurricane season"),
+        ("with coverage running across three annual risk periods from calendar year 2024", "three annual risk periods"),
+        ("the market has been quiet this year and the deal is the first of its kind", None),
+        ("the sponsor returns for the first time in five years with a new deal", None),
+    ]:
+        got = term(text)
+        check(got == want, f"UNIT term recall {text[:40]!r}", f"want={want!r} got={got!r}")
+    for text, years in [("three hurricane season", 3), ("three annual risk periods", 3), ("3 year", 3)]:
+        check(_term_to_years(text) == years, f"UNIT term-to-years {text!r}", repr(_term_to_years(text)))
 
 
 def unit_percent_parsing():
@@ -1544,6 +1676,7 @@ def main():
     unit_sentences()
     unit_backward_reference()
     unit_maturity_class_scoped()
+    unit_maturity_recall_round3()
     n_unit = len(results)
     if golden:
         unit_registry_rules()       # parses pages; reads data/queue.csv
@@ -1839,7 +1972,7 @@ def main():
     # checks when the separate-series-total rule was pinned (2026-10-21).
     # The tiers are pinned separately so unit checks can be added without
     # touching the golden pin, which has only ever been measured over raw/.
-    EXPECTED_UNIT_CHECKS = 291
+    EXPECTED_UNIT_CHECKS = 328
     EXPECTED_GOLDEN_CHECKS = 1965
     n_golden = len(results) - n_unit
     if n_unit != EXPECTED_UNIT_CHECKS:

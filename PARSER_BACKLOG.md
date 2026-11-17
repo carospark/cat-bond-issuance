@@ -78,7 +78,16 @@ the 45 were four families, two of them mechanisms and now fixed:
   stays n/a), and the Kilimanjaro II 2017 pages where "three tranches" means
   three classes across two series.
 
-## 3. Recall on maturity/term — round one done 2026-09-15
+## 3. Recall on maturity/term — rounds one to three done (2026-09-15, 09-30, 11-17)
+
+Round three (2026-11-17, HANDOFF checkpoint "maturity recall round three"):
+single-class adoption, the series-scoped veto, the positional extension
+veto, "April, 2015", the from-X-to-Y maturity with its policy-window veto,
+five term phrasings, and the `_series_tokens` boundary fix. 355 -> 375
+stated maturities, 451 -> 644 terms, 611 -> 763 scheduled, 0 violations.
+The two "still open" bullets below (single-tranche class vote; Isosceles)
+are closed; the rest of the list stands.
+
 
 Was 120/1,311 deals with a stated maturity. The pages say it five other ways;
 all now read, in priority order (`_apply_patterns` stops at the first hit):
@@ -101,14 +110,15 @@ CLASS's term on a multi-class page. Result: 354 stated maturities,
   Of the other 28 no-maturity deals with a class-scoped date: 8 have classes
   that disagree (correctly unadopted), 8 state one class of several, and 12
   are SINGLE-TRANCHE deals whose only class states the date ("The single
-  tranche of Class A notes ... to the end of May 2027", Herbie Re 2025-1) --
-  the next rule, and 12x this one: one class vote on a one-tranche deal is
-  the deal's maturity.
+  tranche of Class A notes ... to the end of May 2027", Herbie Re 2025-1).
+  DONE 2026-11-17: `_single_class_maturity`, exactly those 12 adopt, flag
+  `maturity_from_single_class`.
 - Isosceles 2023 was never this case. The page covers three series: Series
   2023-A Classes A-D due May 10, 2024; Series 2023-C and 2023-G Class E due
-  June 7, 2024. It reads "June 2024" because the Series 2023-C sentence names
-  no Class and so passes as deal-level. Latest maturity, by accident: a
-  SERIES-scoped date on a multi-series page should be vetoed like a class's.
+  June 7, 2024. It read "June 2024" because the Series 2023-C sentence names
+  no Class and so passed as deal-level. DONE 2026-11-17: `_series_scope`
+  vetoes a series-scoped date on a multi-series page like a class's; the
+  deal now has no page maturity (the two dates disagree).
 - `stated_derived_mismatch` is now a real signal (month ordinals, not
   strings): where it fires the stated date wins and the term was approximate
   ("three-year" issued March, matures June). 94 deals; read a few.

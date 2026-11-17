@@ -56,7 +56,9 @@ MONTHS = (r"(?:January|February|March|April|August|September|October|November|"
           r"December|June|July|Sept|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|"
           r"Nov|Dec)")
 # "May 2030", "January 8, 2014", "December 6th 2018": month, optional day, year.
-DATE_MY = MONTHS + r"(?:\s+\d{1,2}(?:st|nd|rd|th)?,?)?\s+\d{4}"
+# "April, 2015" (a comma with no day: Mythen 2012-1's per-class "Notes due
+# April, 2015") is the same month-year.
+DATE_MY = MONTHS + r"(?:\s+\d{1,2}(?:st|nd|rd|th)?)?,?\s+\d{4}"
 # A maturity sentence that is not this deal's scheduled maturity: "have had
 # their maturity extended again to December 6th 2018" (Residential Re 2014-1,
 # a loss-development extension, held in the lifecycle fields), "Lakeside Re
@@ -64,8 +66,16 @@ DATE_MY = MONTHS + r"(?:\s+\d{1,2}(?:st|nd|rd|th)?,?)?\s+\d{4}"
 # it" (the predecessor's), "The riskier Class 11 tranche ... protection to the
 # end of May 2025, while the other two" (one class of three).
 MATURITY_EXCLUDE_RE = re.compile(
-    r"\bexten(?:d|ded|ding|sion)\b|\breplac\w+|\brenew\w+|\broll(?:ed|ing)? (?:over|into)",
-    re.IGNORECASE)
+    r"\breplac\w+|\brenew\w+|\broll(?:ed|ing)? (?:over|into)", re.IGNORECASE)
+# The extension veto is positional (2026-11-17): "maturity extended again to
+# December 6th 2018" has the extension word BEFORE the date and is dropped;
+# "due to run until May 2013 with the possibility to extend in three month
+# increments" (Blue Fin Series 3) has it AFTER and is the scheduled maturity.
+# The old sentence-wide veto threw that one away.
+EXTENSION_BEFORE_RE = re.compile(r"\bexten(?:d|ded|ding|sion|sions)\b", re.IGNORECASE)
+
+# A term's number: the word table or digits ("three", "3", "2.5"), never "this".
+TERM_NUM = r"(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|twelve)"
 
 # A settled-price anchor must not accept the first endpoint of a range.
 NOT_RANGE = r"(?!\s*(?:to|and|[-\u2013])\s*\d+(?:[.,]\d+)?\s*%)"
@@ -174,6 +184,17 @@ TIER2_PATTERNS = {
         # "a zero-coupon bond that expires in December 2014" (Dodeka II)
         (r"(?:expir\w+|ends?|ending|terminat\w+|due to end)\s+(?:in|on|at the end of|at)\s+("
          + DATE_MY + r")", "strong"),
+        # "running from June 2017 to the end of December 2019" (Bonanza 2016-1,
+        # a term that starts after issue, so issue + term would be wrong too),
+        # "cover ... from December 2010 until April 2014" (Atlas VI 2010-1).
+        # Anchored on a coverage word, and not a portfolio's origination
+        # window ("policies underwritten from January 2019 through September
+        # 2019", Triangle Re 2019-1).
+        (r"\b(?:cover|coverage|protection|reinsurance|period|term|running|runs|run)\b"
+         r"(?![^.]{0,90}?\b(?:polic(?:y|ies)|loans?|portfolio|pool|originat\w*|underwrit\w*|"
+         r"written|effective date|reporting date))"
+         r"[^.]{0,90}?\bfrom\s+" + DATE_MY + r"\s+(?:to|until|through|till)\s+(?:the end of\s+)?("
+         + DATE_MY + r")", "strong"),
     ],
     # NOTE: \d+ does not cross a decimal point, so "a 12.5-year term" matched
     # the "5" and reported a 5-year term. Ground-truth labelling caught this;
@@ -184,7 +205,22 @@ TIER2_PATTERNS = {
         (r"((?:\w+|\d+(?:\.\d+)?)[-\s](?:year|month)s?)\s+term", "strong"),
         (r"term of ((?:\w+|\d+(?:\.\d+)?)[-\s](?:year|month)s?)", "strong"),
         (r"(?:term|covering|run(?:ning)? across)[^.]{0,30}?"
-         r"((?:\w+|\d+(?:\.\d+)?)[-\s](?:hurricane seasons|wind seasons|years|year))", "strong"),
+         r"((?:\w+|\d+(?:\.\d+)?)[-\s](?:hurricane seasons|wind seasons|annual risk periods|years|year))", "strong"),
+        # Recall round 2026-11-17, read from the audit-sample deals the
+        # patterns above missed. The number is restricted to the word table
+        # or digits so "this year" cannot become a term.
+        # "a three-year period" (CAT-Mex), "This $200m, 3 year deal" (Atlas V),
+        # "This three year deal comprises two tranches" (ResRe 2004)
+        (r"\b(" + TERM_NUM + r"[-\s]years?)\s+(?:(?:risk\s+)?period|deal|transaction|"
+         r"cat bond|bond|issuance|cover|coverage|protection)\b", "strong"),
+        # "three years of cover" (Nelson Re 2008-1), "three years of coverage"
+        # (Blue Ridge 2025-1), "three years of both annual aggregate and
+        # per-occurrence retrocessional reinsurance protection" (Bowline 2022-1)
+        (r"\b(" + TERM_NUM + r"\s+years?)\s+of\s+(?:[\w-]+\s+){0,6}?"
+         r"(?:cover|coverage|protection|reinsurance|retrocession)\b", "strong"),
+        # "a three hurricane season source of ... reinsurance" (Hestia 2025-1)
+        (r"\b(" + TERM_NUM + r"\s+(?:hurricane|wind)\s+seasons?)\s+(?:source|of|cover|"
+         r"coverage|protection)\b", "strong"),
     ],
     "payout_floor": [
         (r"minimum of (\d+(?:[.,]\d+)?\s*%)[^.]{0,40}principal", "strong"),
@@ -713,9 +749,13 @@ def _series_tokens(text):
             r"(?:^|-)([a-z]+)-(i|ii|iii|iv|v|vi|vii|viii|ix|x|xi|xii|xiii|xiv|xv)(?=-|$)", text or ""):
         out.add(f"{word.upper()} {numeral.upper()}")
     # Letter series enumerate: "(Series 2023-A, C, G)" / slug "2023-a-c-g".
+    # The letter must end at a word boundary: the slug "...-2011-ltd-..."
+    # is not a series "2011-L" (it made every Residential Re page look
+    # two-series once series scoping existed, 2026-11-17).
+    # A letter may carry one digit: Isosceles "Series 2020-C1" / "2020-A1".
     for year, first, rest in re.findall(
-            r"\b((?:19|20)\d\d)-([A-Za-z])((?:(?:,\s*|-)[A-Za-z]\b)*)", text or ""):
-        for letter in [first] + re.findall(r"[A-Za-z]", rest):
+            r"\b((?:19|20)\d\d)-([A-Za-z]\d?)\b((?:(?:,\s*|-)[A-Za-z]\d?\b)*)", text or ""):
+        for letter in [first] + re.findall(r"[A-Za-z]\d?", rest):
             out.add(f"{year}-{letter.upper()}")
     return out
 
@@ -823,7 +863,8 @@ RATIO_GUARDED = {"expected_loss", "attachment_probability", "exhaustion_probabil
 
 def _strip_day(date_text):
     """"December 6th 2018" / "January 8, 2014" -> "December 2018" / "January 2014"."""
-    return re.sub(r"\s+\d{1,2}(?:st|nd|rd|th)?,?(?=\s+\d{4})", "", date_text)
+    out = re.sub(r"\s+\d{1,2}(?:st|nd|rd|th)?,?(?=\s+\d{4})", "", date_text)
+    return re.sub(r",(?=\s+\d{4})", "", out)
 
 
 def _spread_is_price(value):
@@ -875,6 +916,66 @@ def _class_agreement(votes):
     return None
 
 
+def _series_scope(sentence, own_series):
+    """The subset of this deal's own series a sentence is scoped to, on a
+    page that covers more than one series; empty otherwise.
+
+    Isosceles 2023-A/C/G is one directory entry for three series with two
+    due dates. "Series 2023-C notes due June 7, 2024" names no Class, so it
+    passed as deal-level and the deal read the later date by accident. A
+    sentence naming SOME of the page's series is that series' fact, and votes
+    like a class does; a sentence naming all of them, or none, is deal-level.
+    """
+    # Real series ids only: year, dash, then one or two digits with an
+    # optional letter, or a letter alone (Isosceles 2023-A/C/G). The slug
+    # tokeniser also yields "2039-2025" (Vision 2039 - 2025-1), which is not
+    # a series and must not make a one-series page look like two.
+    own = {t for t in (own_series or ())
+           if re.fullmatch(r"(?:19|20)\d\d-(?:\d{1,2}[A-Za-z]?|[A-Za-z]\d?)", t)}
+    if len(own) < 2:
+        return set()
+    cited = _series_tokens(re.sub(r"\((?!\s*Series\b)[^)]*\)", " ", sentence)) & own
+    return cited if cited and cited != own else set()
+
+
+def _single_class_maturity(votes, text, own_series=frozenset()):
+    """(value, label) when the page has ONE class and that class states one
+    maturity, else None.
+
+    "The single tranche of Class A notes ... across a two-year term and two
+    annual risk periods to the end of May 2027" (Herbie Re 2025-1): the
+    class-scoped veto is right on a multi-class page and wrong here, where
+    the one class IS the deal. Guards: exactly one class label anywhere in
+    the prose (a second label, even undated, means a tranche whose term is
+    unknown); no plural "tranches"/"classes" and no stated count above one
+    in any sentence about this deal; one value.
+    """
+    class_votes = [(lb, v) for lb, v in votes if lb and not str(lb).startswith("SERIES ")]
+    if not class_votes:
+        return None
+    labels = {lb for lb, _ in class_votes}
+    values = {v for _, v in class_votes}
+    if len(labels) != 1 or len(values) != 1:
+        return None
+    page_labels = {m.group(1).upper() for m in CLASS_LABEL_RE.finditer(text)}
+    if page_labels != labels:
+        return None
+    for sent in sentences(text):
+        if _series_tokens(sent) - set(own_series or ()):
+            continue
+        # "while the other two run longer": a plural anywhere on the page is a
+        # tranche whose term this class does not speak for.
+        if re.search(r"\b(?:tranches|classes)\b", sent, re.IGNORECASE):
+            return None
+        m_sc = STATED_COUNT_RE.search(sent)
+        if m_sc:
+            tok = m_sc.group(1).lower()
+            count = int(tok) if tok.isdigit() else WORD_NUM.get(tok)
+            if count and count > 1:
+                return None
+    return values.pop(), labels.pop()
+
+
 def _apply_patterns(name, patterns, text, issue_year=None, own_series=frozenset()):
     """Run every pattern, collect distinct candidates, and grade the result."""
     hits, strength_used = [], None
@@ -895,17 +996,25 @@ def _apply_patterns(name, patterns, text, issue_year=None, own_series=frozenset(
                 dropped.append(value + " (contribution share)")
                 continue
             if name == "maturity_date":
+                sent_start = _sentence_start(text, m.start())
                 sent = _sentence_at(text, m.start())
-                if MATURITY_EXCLUDE_RE.search(sent):
+                if (MATURITY_EXCLUDE_RE.search(sent)
+                        or EXTENSION_BEFORE_RE.search(text[sent_start:m.start(1)])):
                     dropped.append(value + " (extension/predecessor/class)")
                     continue
-                if CLASS_SCOPED_RE.search(sent):
+                series_scope = _series_scope(sent, own_series)
+                if CLASS_SCOPED_RE.search(sent) or series_scope:
                     dropped.append(value + " (extension/predecessor/class)")
                     # One class's term is not the deal's, but it is a vote: if
                     # every class-scoped maturity agrees (below), so does the
-                    # deal. A backward reference is no vote.
+                    # deal. A backward reference is no vote. A sentence scoped
+                    # to ONE series of a multi-series page (Isosceles 2023-A/C/G:
+                    # "Series 2023-C notes due June 7, 2024") votes the same way.
                     if not _is_backward_reference(sent, issue_year, own_series):
-                        label = _class_label_before(sent, m.start() - _sentence_start(text, m.start()))
+                        if CLASS_SCOPED_RE.search(sent):
+                            label = _class_label_before(sent, m.start() - sent_start)
+                        else:
+                            label = "SERIES " + "/".join(sorted(series_scope))
                         class_votes.append((label, _strip_day(value)))
                     continue
                 value = _strip_day(value)
@@ -930,6 +1039,14 @@ def _apply_patterns(name, patterns, text, issue_year=None, own_series=frozenset(
                           "; ".join("Class %s: %s" % (lb, v)
                                     for lb, v in sorted(set(class_votes))),
                           ["maturity_from_class_agreement=%s" % sorted(labels)]
+                          + (["foreign_deal_reference_excluded=%s" % dropped]
+                             if dropped else []))
+        single = _single_class_maturity(class_votes, text, own_series)
+        if single:
+            value, label = single
+            return _field(value, "medium", "regex:maturity_date:single_class",
+                          "Class %s: %s (the page's only class)" % (label, value),
+                          ["maturity_from_single_class=%s" % label]
                           + (["foreign_deal_reference_excluded=%s" % dropped]
                              if dropped else []))
     if not hits:

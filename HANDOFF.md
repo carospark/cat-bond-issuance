@@ -3,6 +3,91 @@
 Read `PARSER_BACKLOG.md` first. It is the current state: what is parsed, what
 is validated, and everything still worth fixing, ordered by value per hour.
 
+## Checkpoint (2026-11-17, later still): maturity recall round three
+
+Backlog section 3's two open rules, plus the phrasings the audit-sample
+deals showed the patterns missing. Tests 2256 -> **2293** (291 -> 328 unit;
+golden pin 1965, unchanged: Isosceles 2023 left the maturity-shape checks
+and Atlas VI 2010-1 joined them). `deals.csv`, `tranches.csv` and
+`validation.csv` rebuilt with `build_review_bundle.py`; roll-forward and
+dashboards rerun on the analysis repo's current bridge.
+
+Rules (`src/parse_deal.py`):
+
+- Single-class adoption (`_single_class_maturity`): a page whose ONLY class
+  states a maturity adopts it, flag `maturity_from_single_class=<label>`,
+  method `regex:maturity_date:single_class`, medium confidence. Guards: no
+  second class label anywhere in the prose, no plural "tranches"/"classes"
+  and no stated count above one in any sentence about this deal. 12 deals
+  adopt (Herbie Re 2025-1 "The single tranche of Class A notes ... to the
+  end of May 2027" among them), the 12 the 2026-09-30 count predicted.
+- Series-scoped veto (`_series_scope`): on a page covering several series,
+  a sentence naming some but not all of them is that series' fact and
+  votes like a class. Isosceles 2023-A/C/G now reads no maturity (May and
+  June 2024 disagree) instead of June 2024 by accident. Only real series
+  ids count as "own" series (year, dash, 1-2 digits with optional letter,
+  or a letter with optional digit); the slug token "2039-2025" (Vision
+  2039 - 2025-1) does not make a one-series page look like two.
+- Extension veto made positional (`EXTENSION_BEFORE_RE`): a sentence is
+  dropped only when the extension word comes BEFORE the date. "due to run
+  until May 2013 with the possibility to extend in three month increments"
+  (Blue Fin Series 3) now reads May 2013; "maturity extended again to
+  December 6th 2018" and "extended through to January 2027" stay dropped.
+- `DATE_MY` accepts "April, 2015" (Mythen 2012-1's three-class list now
+  agrees); `_strip_day` drops the bare comma.
+- New maturity pattern: "<cover word> ... from <Month YYYY> to/until/
+  through [the end of] <Month YYYY>" (Bonanza 2016-1 "running from June
+  2017 to the end of December 2019", Atlas VI 2010-1 "cover ... from
+  December 2010 until April 2014"), vetoed when the clause is a policy or
+  loan window ("policies written primarily from April 1, 2021 through
+  September 30, 2021", Oaktown Re VII; "underwritten from January 2019
+  through September 2019", Triangle Re 2019-1; "Covered mortgage loans
+  have an effective date from ...", Home Re 2021-2). Those three read as
+  pre-issue maturities in the first draft; `maturity_not_after_issue`
+  violations are 0.
+- New term patterns, number restricted to the word table or digits
+  (`TERM_NUM`, so "this year" is never a term): "<n>-year period / deal /
+  transaction / cover / protection" (CAT-Mex, Atlas V, Residential Re
+  2004), "<n> years of [up to six words] cover / coverage / protection /
+  reinsurance" (Nelson Re 2008-1, Blue Ridge 2025-1, Bowline 2022-1), "<n>
+  hurricane season(s) source / of" (Hestia 2025-1), and "annual risk
+  periods" in the running-across pattern (Ocelot 2023-1). The plural-only
+  "hurricane seasons" in the older pattern stays plural: letting it match
+  the singular read "Atlantic hurricane season" as a term on five Dodeka
+  pages in the first draft.
+- `_series_tokens`: a letter series must end at a word boundary and may
+  carry one digit. "2011-ltd" in every Residential Re slug used to yield a
+  phantom series "2011-L" (harmless until series scoping existed, then it
+  dropped Residential Re 2011-2's and 2014-2's stated dates); "2020-XX" is
+  no longer "2020-X" (Randolph Re 2020-1's own launch sentence had been
+  excluded as foreign); "2020-C1" / "2020-A1" are now tokens (Isosceles
+  2020-C1's sibling sentence is excluded again, Cerulean 2020-B gains one
+  exclusion; no size moves).
+
+Measured over `raw/` (1,311 deals), before -> after:
+
+| | before | after |
+|---|---:|---:|
+| stated maturities | 355 | 375 (21 gained, Isosceles 2023 lost) |
+| term_length filled | 451 | 644 |
+| maturity_scheduled filled | 611 | 763 |
+| maturity_not_after_issue violations | 0 | 0 |
+| single-class adoptions / class agreements | 0 / 1 | 12 / 2 |
+| stated_derived_mismatch | 95 | 121 (more terms to disagree with) |
+| other deal-level values moved | | none (Randolph Re 2020-1's size evidence sentence only) |
+
+Roll-forward (ex-mortgage, $m, outstanding minus publisher), commit
+535277c -> now: 2019 +21, 2020 +253, 2021 -411, 2022 +615 unchanged; 2023
+-620 -> -720; 2024 +979 -> +1,120; 2025 +2,374 -> +2,274; 2026 +4,791
+unchanged; mean absolute gap 2010-2026 953 -> 900. Coverage of the
+maturity leg by issued dollars: stated 25.7 -> 27.1%, derived 4.0 -> 6.0%,
+TRACE 58.7 -> 57.7%, imputed public 8.7 -> 6.8%, private 3.0 -> 2.4%;
+known from page or TRACE 88.4 -> 90.8%. Stated vs TRACE: kept 176 -> 190
+($43.6bn -> $45.9bn), derived replaced by TRACE 189 -> 283, imputed
+replaced 318 -> 209, overrides unchanged (6 later-TRACE, 1 page-later
+kept, class-vote overrides 1 -> 2). Upcoming maturities: mean absolute
+quarterly difference 649 -> 630, window total unchanged.
+
 ## Checkpoint (2026-11-17): TRACE maturities in the roll-forward; the cancelled-status false positive closed
 
 Two items from the 2026-10-25 "left open" list. Tests 2227 -> **2256**
