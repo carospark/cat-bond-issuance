@@ -111,6 +111,9 @@ src/validate.py          cross-field invariants
 src/sibling_registry.py  figures belonging to a predecessor deal
 src/build_queue.py       crawl order: family-grouped, chronological
 src/build_tables.py      flat deal and tranche projections
+src/build_review_bundle.py  the full deals.csv and tranches.csv (build_tables drops columns)
+src/roll_forward.py      outstanding principal per deal, monthly: issue, loss, repayment
+src/net_supply.py        issuance, outstanding and net supply against the publisher's charts
 src/random_sample.py     fixed-seed accuracy benchmark
 tests/test_golden.py     the assertion suite
 ```
@@ -138,6 +141,24 @@ tranche or prose parsing can obscure a basic crawl failure.
 Outputs are local and gitignored. The dashboard excludes mortgage ILS while the
 parsed directory is complete, so a positive scope gap is expected; a deficit
 means the parse is missing deals and exits non-zero.
+
+## Validation: outstanding principal
+
+`src/roll_forward.py` carries each deal month by month from issue through
+losses, recoveries and repayment, and `src/net_supply.py` compares the
+resulting stock with the publisher's outstanding chart. The maturity each
+deal repays at comes, in order, from the page's stated date, from the
+secondary-market master through the analysis repository's bridge
+(`--trace-maturities`, defaulting to `../cat-bond-flow-analysis/data/bridge.csv`
+when that checkout exists, `--no-trace-maturities` to run without it), from
+a stated term, and last from a class median. A stated date is kept when
+TRACE is within three months or later than TRACE (the bridge may hold only a
+deal's short classes) and replaced when TRACE is later by more; every deal's
+`maturity_source` and the page-versus-TRACE gap are written beside the
+stock, and `data/validation_dashboards/trace_maturities.csv` lists the
+comparison. With TRACE, 88% of issued dollars repay at a date read from a
+page or the tape rather than imputed, and the stock sits within about a
+billion dollars of the publisher in every year from 2019.
 
 ## External source archive
 
