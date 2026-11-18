@@ -80,6 +80,43 @@ TERM_NUM = r"(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|t
 # A settled-price anchor must not accept the first endpoint of a range.
 NOT_RANGE = r"(?!\s*(?:to|and|[-\u2013])\s*\d+(?:[.,]\d+)?\s*%)"
 
+# Settled-spread recall round (2026-11-18). One percent, then the guards every
+# new settlement anchor carries: not a range endpoint (NOT_RANGE and the
+# lookbehinds), not a CHANGE in price ("at 2.25%, which
+# represents a 25% drop": the first number is the spread, the second is
+# caught by NOT_CHANGE when a pattern lands on it), and not one entry of a
+# per-class pricing list ("finalised at 11.25% for the A-1 notes, 4.5% for
+# the B-1 notes": labels without "Class" are not windowed, so the first
+# value would be handed to a single unlabelled row). A price of par needs no
+# guard here: _spread_is_price drops any value of 50% or more.
+PCT = r"(\d+(?:[.,]\d+)?\s*%)"
+NOT_RANGE_END = r"(?<![\d.,])(?<!to )(?<!and )(?<!\u2013 )(?<!- )(?<!by )"
+NOT_CHANGE = (r"(?!\s*(?:drop|decline|decrease|increase|rise|reduction|fall|better|"
+              r"cheaper|higher|lower|above|below|from\b|change|loss|upsiz|in (?:price|pricing|spread)))")
+NOT_CLASS_LIST = r"(?!\s*for the\b)"
+SETTLED_PCT = NOT_RANGE_END + PCT + NOT_RANGE + NOT_CHANGE + NOT_CLASS_LIST
+# Words a settlement anchor may run across before its number. A sentence
+# that mentions a loss or a probability between the verb and the percent is
+# stating a different field ("fixed at $175m in size, with an expected loss
+# of 2%"); "of par" is a zero-coupon price.
+# Expectation language is not a settlement: "pricing looks set to settle at
+# 8.25%" (Residential Re 2019-1), "looks likely to end up at the top-end, of
+# 4.5%". The gap may not run across it, and the verb may not follow it.
+EXPECTATION_WORDS = r" look| likely| expect| could| might| set to"
+SETTLE_GAP = r"(?:(?! loss| probab| of par" + EXPECTATION_WORDS + r")[^.%;]){0,40}?"
+BAND_GAP = r"(?:(?!" + EXPECTATION_WORDS + r")[^.%;]){0,60}?"
+NOT_EXPECTED = r"(?<!set to )(?<!likely to )(?<!expected to )(?<!could )(?<!might )(?<!looks to be )"
+# "fixed at the top-end of the already revised upwards guidance, at 19%":
+# the band word, an optional "-end/-point/-half", an optional "of ... guidance
+# | range", then the number introduced one of several ways.
+GUIDANCE_BAND = (r"\b(?:low|lower|lowest|bottom|top|upper|high|higher|highest|mid-?point|mid|middle)"
+                 r"(?:[- ](?:end|point|half))?"
+                 r"(?: of (?:the )?(?:[a-z-]+ ){0,4}?(?:guidance range|guidance|range))?"
+                 r",?\s*(?:settling at|settled at|at an?|at the|at|of|to offer (?:investors )?an?|"
+                 r"to pay (?:investors )?an?|to provide an?|for an?|with an?)\s+"
+                 r"(?:fixed |elevated |revised |raised |reduced |lowered |initial )?")
+SETTLE_VERB = r"(?:fixed|settled|settling|settle|finalised|finalized|priced|pricing|moved|fell|rose|risen|tightened|remained)"
+
 # name -> (pattern, strength). "strong" patterns carry an explicit anchor
 # phrase; "weak" ones are fallbacks and are always downgraded to low.
 TIER2_PATTERNS = {
@@ -111,6 +148,15 @@ TIER2_PATTERNS = {
         # Artemis sometimes writes "attachment point of 2.47%" for the
         # probability (Finca). A percentage is never a monetary point.
         (r"attachment point (?:at|of) (\d+(?:[.,]\d+)?\s*%)", "weak"),
+        # Recall round 2026-11-18. Of 115 core 2019-2022 deals without an
+        # attachment probability, two state one: "a 5.9% attachment
+        # probability and a 3.65% expected loss" (Hexagon II 2019-1, number
+        # before the cue) and "an initial annual modelled attachment
+        # probability and expected loss of 0.888%" (MetroCat 2020-1, one
+        # number for both). The other 113 pages never state it: the field's
+        # coverage in those years is the source's, not the parser's.
+        (NOT_RANGE_END + r"(\d+(?:[.,]\d+)?\s*%) attachment probability", "strong"),
+        (r"attachment probability and expected loss of (\d+(?:[.,]\d+)?\s*%)", "strong"),
     ],
     "exhaustion_probability": [
         (r"exhaustion probability of (?:approximately |around )?(\d+(?:[.,]\d+)?\s*%)", "strong"),
@@ -155,6 +201,63 @@ TIER2_PATTERNS = {
         # spread-vs-price guard in _apply_patterns; this reads the equivalent.
         (r"(?:coupon|spread) equivalent of (?:around |roughly |approximately )?"
          r"(\d+(?:[.,]\d+)?\s*%)" + NOT_RANGE + r"", "strong"),
+        # Recall round 2026-11-18: 89 of 163 core 2019-2022 deals had no
+        # settled spread; 83 of their pages state one. The anchors below sit
+        # AFTER the originals, so they only fire where nothing above did.
+        # (a) The band-of-guidance form, by far the commonest: "pricing has
+        # now been fixed at the upper-end of initial guidance, at 5.5%"
+        # (Residential Re 2020-1), "settled at the top-end of guidance, at
+        # 4.75%" (Bonanza 2020-1), "priced at the low-end of reduced
+        # guidance, at a 6.75% initial coupon spread" (Hypatia 2020-1),
+        # "pricing fell to below the low-end of guidance, settling at 5.75%"
+        # (Northshore II 2021-1), "the pricing settled at the low-end of
+        # guidance, to offer investors a 6.75% coupon" (Cape Lookout 2019-2),
+        # "priced at the top of elevated guidance, at 16%" (Marlin 2022-1),
+        # "fixed in the bottom-half of guidance at 4.75%" (Four Lakes 2021-1).
+        (NOT_EXPECTED + SETTLE_VERB + BAND_GAP + GUIDANCE_BAND + SETTLED_PCT, "strong"),
+        # (b) A settlement verb then "at"/"of" a number, with a short gap:
+        # "coupon was finalised at 5%" (Ursa Re II 2022-1), "coupon fixed at
+        # 5.5%" (Sanders II 2020-2), "settled with a coupon spread of 10%"
+        # (Residential Re 2022-2), "priced its $95 million of notes at 2.9%"
+        # (Phoenician 2020-2), "finalised at the 8.5% coupon level" (Gateway
+        # 2022-1), "the pricing at the fixed level of a 14% coupon" (Montoya
+        # 2022-2), "priced at the raised above-guidance level of 7.75%"
+        # (Everglades II 2022-1).
+        (NOT_EXPECTED + r"\b(?:fixed|finalised|finalized|settled|settling|priced|pricing)" + SETTLE_GAP
+         + r"\b(?:at|of)\s(?:the |an? |just )?(?:elevated |raised |revised |reduced |fixed level of an? |fixed |flat )?"
+         + SETTLED_PCT, "strong"),
+        # (c) "the coupon now suggested at a fixed 7.75%" (Everglades II 2022-1).
+        (r"at a fixed " + SETTLED_PCT, "strong"),
+        # (d) What the settlement offers: "priced ... to pay investors a 6.9%
+        # coupon" (Black Kite 2022-1), "settled down some 16% from the initial
+        # midpoint of spread guidance, to offer a 6% coupon" (First Coast III
+        # 2021-1), "finalised at a raised level though, to provide a 5.1%
+        # coupon" (Citrus 2022-1). Anchored on a settlement verb earlier in
+        # the sentence so launch-time "to pay investors" ranges stay out
+        # (NOT_RANGE catches those anyway).
+        (r"\b(?:priced|settled|fixed|finalised|finalized|pricing)(?:[^.;]|\.(?=\d)){0,80}?"
+         r"\bto (?:offer|pay|provide) (?:(?:ILS |cat bond )?investors )?(?:an? )?" + SETTLED_PCT, "strong"),
+        # (e) "the initial risk interest spread to be paid to investors is 7%"
+        # (Ursa Re II 2022-2), "Class 11 - $35 million; coupon 12.5%"
+        # (Residential Re 2022-1's per-class list). "pricing at the 4.4% risk
+        # margin" (IBRD CAR 130) is read by (b).
+        (r"risk (?:interest )?(?:spread|margin)(?: to be paid)?(?: to investors)? is " + SETTLED_PCT, "strong"),
+        (r"; coupon " + SETTLED_PCT, "strong"),
+        # (f) Zero-coupon equivalents stated with the number first, or as a
+        # "coupon equivalent price/premium of": "settled at 88% of par, so a
+        # roughly 12% coupon equivalent" (Bonanza 2020-2 Class B), "fixed at
+        # the upper-end of guidance, with a coupon equivalent price of 26%"
+        # (Residential Re 2020-2 Class 1), "paying 91.75% of principal, which
+        # implies a coupon equivalent premium of 8.25%" (Casablanca 2020-1).
+        # The price itself lands in (a)/(b) first and is dropped by
+        # _spread_is_price, which lets these run.
+        (r"\b(?:priced|settled|fixed|finalised|finalized|paying|pay|paid)(?:[^.;]|\.(?=\d)){0,120}?"
+         + NOT_RANGE_END + PCT + r" coupon equivalent", "strong"),
+        (r"coupon equivalent (?:price|premium) of " + SETTLED_PCT, "strong"),
+        # "priced at 91.75%, so an 8.25% equivalent spread" (Gateway 2025-1
+        # Class C-1): the equivalent with the noun order reversed.
+        (r"\b(?:priced|settled|fixed|finalised|finalized)(?:[^.;]|\.(?=\d)){0,120}?"
+         + NOT_RANGE_END + PCT + r" equivalent spread", "strong"),
     ],
     "price_guidance": [
         (r"guidance[^.]{0,80}?(\d+(?:[.,]\d+)?\s*%\s*(?:to|and|[-–])\s*\d+(?:[.,]\d+)?\s*%)", "strong"),
@@ -1607,7 +1710,7 @@ TRANCHE_SIZE_RES = [(re.compile(x, re.IGNORECASE), k) for x, k in (
 # silently dropped, collapsing a two-tranche deal into one.
 # "Class A1" / "Class A2" without a hyphen (Integrity Re III 2025-1): unseen,
 # their pricing bled into Class C's window.
-CLASS_RE = re.compile(r"\bClass\s+([A-Z]{1,3}-\d+[A-Z]?|[A-Z]{1,2}\d{1,2}(?:-[A-Z])?\b|[A-Z]{1,3}\b|\d{1,2}\b)",
+CLASS_RE = re.compile(r"\bClass\s+([A-Z]{1,4}-\d+[A-Z]?|[A-Z]{1,2}\d{1,2}(?:-[A-Z])?\b|[A-Z]{1,4}\b|\d{1,2}\b)",
                       re.IGNORECASE)
 
 # ...but "Class 3 Bermuda-based insurer" is a regulatory class, not a tranche.
@@ -1840,12 +1943,12 @@ def _extract_tranche_metrics(text, ctx):
 LABEL_BOUND_RE = re.compile(
     # \s* not \s+: _M already ends with \s*, which consumed the separator, so
     # \s+ could never match and this regex silently never fired.
-    _M + r"\s*(?:tranche\s+of\s+)?Class\s+([A-Z]{1,3}-\d+[A-Z]?|[A-Z]{1,3}\b|\d{1,2}\b)",
+    _M + r"\s*(?:tranche\s+of\s+)?Class\s+([A-Z]{1,4}-\d+[A-Z]?|[A-Z]{1,4}\b|\d{1,2}\b)",
     re.IGNORECASE)
 
 
 FORWARD_BOUND_RE = re.compile(
-    r"Class\s+([A-Z]{1,3}-\d+[A-Z]?|[A-Z]{1,3}\b|\d{1,2}\b)\s*[\u2013\u2014:-]\s*" + _M,
+    r"Class\s+([A-Z]{1,4}-\d+[A-Z]?|[A-Z]{1,4}\b|\d{1,2}\b)\s*[\u2013\u2014:-]\s*" + _M,
     re.IGNORECASE)
 
 

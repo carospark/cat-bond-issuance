@@ -249,7 +249,13 @@ two duplicated Kilimanjaro III 2019 rows where Class B-2 inherited Class A's
 15%-16% guidance beside its correct 9.5% spread; B-2's page-stated guidance is
 8.75%-9.75%. This is grouped cross-series binding, not a spread-value defect.
 
-- Recall: spread is emitted for ~1/4 of tranches before 2025 (`n_spread`).
+- Recall: CLOSED 2026-11-18 (HANDOFF checkpoint of that date): 519 -> 887
+  tranches with a settled spread, nine new anchors behind one `SETTLED_PCT`
+  guard set, no existing value changed; yearly mean gap to the publisher
+  0.54pp -> 0.40pp. Attachment probability is a source gap (113 of 115
+  core 2019-2022 deals without one never state it): band by EL there.
+- "Class C 2" (a space inside the label, Gateway 2025-1) is not a window,
+  so C-1 reads C 2's settled spread. One label-regex case.
 - Guidance endpoints still leak as settled spreads ("guidance reduced to 16%
   to 16.25%" -> 16%): NOT_RANGE only guards the anchors that carry it.
 - `price_guidance` still holds prices of par for zero-coupon notes.

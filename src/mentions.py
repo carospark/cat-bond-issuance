@@ -98,7 +98,7 @@ RANGE_RE = re.compile(r"between\s|from\s|\bto\b|\band\b")
 
 # "Class A1" / "Class A2" without a hyphen (Integrity Re III 2025-1): unseen,
 # their pricing bled into Class C's window.
-CLASS_RE = re.compile(r"\bClass\s+([A-Z]{1,3}-\d+[A-Z]?|[A-Z]{1,2}\d{1,2}(?:-[A-Z])?\b|[A-Z]{1,3}\b|\d{1,2}\b)",
+CLASS_RE = re.compile(r"\bClass\s+([A-Z]{1,4}-\d+[A-Z]?|[A-Z]{1,2}\d{1,2}(?:-[A-Z])?\b|[A-Z]{1,4}\b|\d{1,2}\b)",
                       re.IGNORECASE)
 
 WINDOW = 60          # chars either side searched for a governing cue
@@ -217,7 +217,7 @@ def scope_of(text, pos):
     # amount, but "from the Class B" is what governs it.
     after = text[pos:pos + 70]
     m = re.match(r"[^.;,]{0,40}?\b(?:of|from|for)\s+(?:the\s+)?(?:\w+\s+){0,3}?"
-                 r"Class\s+([A-Z]{1,3}-\d+[A-Z]?|[A-Z]{1,3}\b|\d{1,2}\b)", after, re.IGNORECASE)
+                 r"Class\s+([A-Z]{1,4}-\d+[A-Z]?|[A-Z]{1,4}\b|\d{1,2}\b)", after, re.IGNORECASE)
     if m:
         return "Class " + canon_label(m.group(1))
     before = text[max(0, pos - 300):pos]

@@ -3,6 +3,116 @@
 Read `PARSER_BACKLOG.md` first. It is the current state: what is parsed, what
 is validated, and everything still worth fixing, ordered by value per hour.
 
+## Checkpoint (2026-11-18): attachment probability and spread recall
+
+A recall round on the two tranche-level fields the atlas's layer view needs
+(`src/parse_deal.py`, `TIER2_PATTERNS`). Tests 2343 -> **2611** (378 -> 419
+unit; golden pin 1965 -> 2192, ten pages added and every new spread value
+adds per-tranche guard checks). `data/tranches.csv` 2051 -> 2052 rows; no
+existing value of any field changed or was lost.
+
+Spread (`spread_risk_margin`): 519 -> **887** tranches, 372 -> 577 deals
+(core property cat 321 -> 512 of 834). Method as always: 163 core 2019-2022
+deals read, 89 without a settled spread, 83 of whose pages state one. One
+mechanism dominated: the settlement reported as a BAND of guidance with the
+number after it ("pricing has now been fixed at the upper-end of initial
+guidance, at 5.5%", "settled at the top-end of guidance, at 4.75%", "priced
+at the low-end of reduced guidance, at a 6.75% initial coupon spread",
+"fell to below the low-end of guidance, settling at 5.75%", "settled at the
+low-end of guidance, to offer investors a 6.75% coupon", "fixed in the
+bottom-half of guidance at 4.75%", "priced at the top of elevated guidance,
+at 16%"); the old anchors needed the number right after "settled/fixed at".
+Nine anchors, in order after the originals so they only fire where nothing
+fired before: the band form; a settlement verb then "at"/"of" within 40
+characters ("coupon was finalised at 5%", "priced its $95 million of notes
+at 2.9%", "finalised at the 8.5% coupon level", "the fixed level of a 14%
+coupon"); "at a fixed 7.75%"; the offered coupon after a settlement verb
+("priced to pay investors a 6.9% coupon", "settled down some 16% from the
+initial midpoint of spread guidance, to offer a 6% coupon"); "the initial
+risk interest spread to be paid to investors is 7%"; the per-class list
+"Class 11 - $35 million; coupon 12.5%"; and zero-coupon equivalents stated
+number first or as a "coupon equivalent price/premium of" ("settled at 88%
+of par, so a roughly 12% coupon equivalent"; the price lands first and
+`_spread_is_price` drops it). Every anchor carries the same guards
+(`SETTLED_PCT`): not a range endpoint in either direction, not a change
+("at 2.25%, which represents a 25% drop" reads 2.25%; "an increase in
+pricing of 6.7% from the mid-point" reads nothing), not one entry of a
+per-class pricing list ("finalised at 11.25% for the A-1 notes, 4.5% for
+the B-1 notes": those labels are not windowed, so the first value would
+have gone to a single unlabelled row), not expectation language ("pricing
+looks set to settle at 8.25%", "looks likely to end up at the top-end, of
+4.5%" stay None), and no loss or probability between the verb and the
+number. Backward references are excluded as before (Phoenician 2020-2 does
+not take 2020-1's 3%; Residential Re 2019-1 Class 13 does not take a 2018
+deal's 3.25%). Every anchor and guard is mutation-tested against
+`unit_spread_recall` (41 synthetic sentences quoting the pages); one
+redundant anchor and one redundant guard were deleted when the sweep showed
+them untested. Hand check: 32 of the 367 new values sampled at random
+against their pages, 32 right, plus the five validation findings the new
+values raised (Sanders III 2022-1, Integrity 2017-1, Topanga 2021-1,
+Casablanca 2020-1, Marlin 2022-1), all five the page's own numbers
+(elevated or zero-coupon pricing, a 15% fixed coupon on a low-EL tranche).
+
+Class labels of four letters. The one wrong value the sample found was
+Gateway Re 2026-1 Class A at 3.5%: the page's Class AAAA notes were not a
+label (`CLASS_RE` and the label binders allowed `[A-Z]{1,3}`), so AAAA's
+"priced at $160 million in size, with a spread of 3.5%" sat in Class A's
+window. `{1,4}` in `mentions.py` and `parse_deal.py`; Class AAAA is now its
+own row with $160m and 3.5%, Class A reads its own 10%, and the deal's
+tranche-sum check goes from "incomplete" to OK (five sizes, -0.7%). One new
+tranche row, 2051 -> 2052; nothing else moved.
+
+Against the publisher's yearly average spread (`validate_dashboards.py`,
+`data/validation_dashboards/el_spread.csv`, 2011-2026): mean absolute
+difference 0.54pp -> 0.40pp; 2022 8.85 -> 8.35 (publisher 8.34), 2023 8.25
+-> 8.85 (8.90), 2020 6.63 -> 7.14 (7.46), 2017 5.57 -> 6.15 (6.51); 2016
+moved away, 6.38 -> 7.87 (7.04), on 12 -> 27 tranches. Per year for core
+deals:
+
+| year | core tranches | AP before | AP after | spread before | spread after |
+|---|---:|---:|---:|---:|---:|
+| 2012 | 42 | 22 | 22 | 14 | 19 |
+| 2013 | 39 | 32 | 32 | 14 | 26 |
+| 2014 | 42 | 28 | 28 | 23 | 30 |
+| 2015 | 31 | 25 | 25 | 14 | 22 |
+| 2016 | 42 | 31 | 31 | 10 | 24 |
+| 2017 | 73 | 62 | 62 | 20 | 47 |
+| 2018 | 50 | 41 | 41 | 8 | 30 |
+| 2019 | 43 | 12 | 13 | 12 | 21 |
+| 2020 | 73 | 5 | 6 | 33 | 66 |
+| 2021 | 66 | 11 | 11 | 30 | 59 |
+| 2022 | 80 | 37 | 37 | 25 | 61 |
+| 2023 | 94 | 85 | 86 | 23 | 78 |
+| 2024 | 104 | 98 | 98 | 45 | 82 |
+| 2025 | 133 | 131 | 131 | 84 | 116 |
+| 2026 | 131 | 118 | 119 | 92 | 107 |
+
+Attachment probability: 802 -> **806**. This one is the source's gap, not
+the parser's: of the 115 core 2019-2022 deals without an attachment
+probability, two pages state one ("a 5.9% attachment probability and a
+3.65% expected loss", Hexagon II 2019-1, number before the cue; "attachment
+probability and expected loss of 0.888%", MetroCat 2020-1, one number for
+both), and 113 never do. Both phrasings are read now (plus MetroCat 2023-1
+and one 2026 tranche); the 2019-2022 layer view has to band by expected
+loss (stated on 1,037 tranches) or stay thin. The deal-level
+`spread_history` column was checked for a single-tranche adoption rule and
+has nothing to adopt: its non-guidance entries are the same "priced to pay
+... risk margin of" sentences the tranche anchors already read.
+
+`data/validation.csv` 272 -> 286 rows: `riskier_tranche_pays_more` 15 ->
+22, `spread_outside_guidance` 2 -> 4 (all read, all the page's numbers,
+above), `spread>EL_plausibility` 3 -> 3; Gateway 2026-1's two size
+findings closed. Precision risks accepted, named: a sentence that moves
+guidance to a single point ("the pricing has moved to the upper-end of
+guidance, at 9.5%", Hestia 2022-1; "price guidance moved to the low-end of
+4.5%", Torrey Pines 2025-1) is read as the settlement, and in every case
+read the final equalled it; "expected to settle ... with pricing at the
+mid-point of 8.75%" (SD Re 2021-1) reads the then-current value. Left
+open: Gateway 2025-1 Class C-1 carries Class C 2's 9.5% because a label
+with a space inside ("Class C 2") is not a window (pre-existing; its own
+"8.25% equivalent spread" anchor exists and would read right once the
+window splits); the 24 multi-term deals without class labels are unchanged.
+
 ## Checkpoint (2026-11-17, night): class-level repayment; loss timing as an option
 
 Two more roll-forward items (`src/roll_forward.py`). Tests 2307 -> **2343**

@@ -182,6 +182,20 @@ PAGES = [
     "bellemeade-re-2020-1-ltd",              # M1-A and M-1A are the same class
     "ibis-re-ii-ltd-series-2013-1",          # "increase in pricing of 6.7%" is not a spread
     "everglades-re-ii-ltd-series-2015-1",   # "upsized by 20%" is not a spread
+    # Settled-spread recall round (2026-11-18): the band-of-guidance form,
+    # verb+at/of, the offered coupon, zero-coupon equivalents stated number
+    # first, the per-class "; coupon X%" list, four-letter class labels, and
+    # the expectation sentence that must stay None.
+    "tailwind-re-ltd-series-2022-1",         # "fixed at the low-end of guidance, at 6.75%" x4 classes
+    "black-kite-re-limited-series-2022-1",   # "priced to pay investors a 6.9% coupon"
+    "phoenician-re-ltd-series-2020-2",       # "priced its $95 million of notes at 2.9%"; sibling's 3% excluded
+    "bonanza-re-ltd-series-2020-2",          # "settled at 88% of par, so a roughly 12% coupon equivalent"
+    "ursa-re-ii-ltd-series-2022-2",          # "the initial risk interest spread to be paid to investors is 7%"
+    "hexagon-ii-reinsurance-dac-series-2019-1",  # "a 5.9% attachment probability"; "settle at the lowest-end"
+    "metrocat-re-ltd-series-2020-1",         # "attachment probability and expected loss of 0.888%"
+    "ibrd-car-130-jamaica",                  # "pricing at the 4.4% risk margin"
+    "gateway-re-ltd-series-2026-1",          # Class AAAA is a label; its 3.5% is not Class A's
+    "residential-reinsurance-2019-limited-series-2019-1",  # "looks set to settle at 8.25%" is not settled
 ]
 
 # Verified by reading the source prose; see notes for provenance.
@@ -218,6 +232,12 @@ EXPECT = {
         "spread_risk_margin": "2.25%",   # "settled to offer investors a yield of 2.25%"
         "expected_loss": "1%", "attachment_probability": "2.1%",
         "exhaustion_probability": "0.45%",
+    },
+    # Recall round 2026-11-18: the number before the cue, and one number
+    # stated for both fields.
+    "hexagon-ii-reinsurance-dac-series-2019-1": {
+        "attachment_probability": "5.9%", "expected_loss": "3.65%",
+        "spread_risk_margin": "5.15%",   # "pricing settle at the lowest-end of guidance, at 5.15%"
     },
     "everglades-re-ltd-series-2014-1": {
         "attachment_probability": "2.89%",   # "attachment probability for the notes is"
@@ -501,7 +521,45 @@ TRANCHE_FIELDS = {
     "residential-reinsurance-2019-limited-series-2019-2": {"Class 1": {"spread_risk_margin": "22.75%"},
                                                            "Class 2": {"spread_risk_margin": "11.5%"}},
     "matterhorn-re-ltd-series-2020-3": {"Class C": {"spread_risk_margin": None}},
-    "gateway-re-ltd-series-2025-1": {"Class A": {"spread_risk_margin": None}},
+    # Gateway 2025-1 Class A: was pinned None while no anchor read "their
+    # pricing was finalised at 10.5%"; the point of the pin was that Class
+    # AA's 93.75% price never reaches it. Class C-1's 9.5% is Class C 2's
+    # (a label with a space inside, not yet a window) and stays unpinned.
+    "gateway-re-ltd-series-2025-1": {"Class A": {"spread_risk_margin": "10.5%"}},
+    # Settled-spread recall round (2026-11-18).
+    "tailwind-re-ltd-series-2022-1": {
+        "Class A": {"spread_risk_margin": "6.75%"}, "Class B": {"spread_risk_margin": "8.75%"},
+        "Class C": {"spread_risk_margin": "11.75%"}, "Class D": {"spread_risk_margin": "14.75%"},
+    },
+    "black-kite-re-limited-series-2022-1": {"Class A": {"spread_risk_margin": "6.9%"}},
+    "phoenician-re-ltd-series-2020-2": {"Class A": {"spread_risk_margin": "2.9%"}},
+    "bonanza-re-ltd-series-2020-2": {
+        "Class A": {"spread_risk_margin": "4.75%"},   # "settled at the initial mid-point of 4.75%"
+        "Class B": {"spread_risk_margin": "12%"},     # "88% of par, so a roughly 12% coupon equivalent"
+        "Class C": {"spread_risk_margin": None},
+    },
+    "ursa-re-ii-ltd-series-2022-2": {
+        "Class AA": {"spread_risk_margin": "7%", "attachment_probability": "1.13%"},
+        "Class B": {"spread_risk_margin": "10.25%", "attachment_probability": "2.43%"},
+    },
+    "metrocat-re-ltd-series-2020-1": {"Class A": {"attachment_probability": "0.888%",
+                                                  "expected_loss": "0.888%"}},
+    "ibrd-car-130-jamaica": {"Class A": {"spread_risk_margin": "4.4%"}},
+    "gateway-re-ltd-series-2026-1": {
+        "Class AAAA": {"spread_risk_margin": "3.5%", "expected_loss": "0.57%"},
+        "Class A": {"spread_risk_margin": "10%", "expected_loss": "3.98%"},
+    },
+    # "we're told pricing looks set to settle at 8.25%" is an expectation;
+    # Class 13's "coupon of 3.25%" is a 2018 deal's (foreign reference).
+    "residential-reinsurance-2019-limited-series-2019-1": {
+        "Class 12": {"spread_risk_margin": None}, "Class 13": {"spread_risk_margin": None},
+    },
+    # The per-class list "Class 11 - $35 million; coupon 12.5%."
+    "residential-reinsurance-2022-limited-series-2022-1": {
+        "Class 10": {"tranche_size_final": None},   # withdrawn: no size
+        "Class 11": {"spread_risk_margin": "12.5%"}, "Class 12": {"spread_risk_margin": "7.5%"},
+        "Class 13": {"spread_risk_margin": "5.25%"}, "Class 14": {"spread_risk_margin": "4%"},
+    },
     # "attachment probability for the Class A tranche of notes is 2.16%", not
     # the UK mortality peril's 0.36% (EL 1.7% sat above it).
     "mythen-re-ltd-series-2012-2": {"Class A": {"attachment_probability": "2.16%"}},
@@ -531,7 +589,6 @@ TRANCHE_FIELDS = {
     "sanders-re-iii-ltd-series-2022-2": {"Class C": {"tranche_size_final": "$37.5 million"}},
     # Withdrawn classes carry no size and the sum check counts them as zero.
     "integrity-re-ltd-series-2022-1": {"Class B": {"tranche_size_final": None}},
-    "residential-reinsurance-2022-limited-series-2022-1": {"Class 10": {"tranche_size_final": None}},
     # Compact labels are canonicalised before windows bind tranche facts.
     "integrity-re-iii-ltd-series-2025-1": {
         "Class A-1": {"spread_risk_margin": "8%"},
@@ -1640,6 +1697,91 @@ def unit_maturity_recall_round3():
         check(_term_to_years(text) == years, f"UNIT term-to-years {text!r}", repr(_term_to_years(text)))
 
 
+def unit_spread_recall():
+    """Settled-spread recall round (2026-11-18). Synthetic sentences quoting
+    the pages, one per anchor, and one per guard the anchors carry."""
+    def sp(text, issue_year=2021, own=frozenset()):
+        return _apply_patterns("spread_risk_margin", TIER2_PATTERNS["spread_risk_margin"],
+                               text, issue_year, own)["value"]
+
+    def ap(text):
+        return _apply_patterns("attachment_probability", TIER2_PATTERNS["attachment_probability"],
+                               text, 2021)["value"]
+
+    for text, want in [
+        # (a) the band of guidance
+        ("but with coupon pricing now fixed at the upper-end of initial guidance, at 5.5%.", "5.5%"),
+        ("while the pricing settled at the top-end of guidance, at 4.75%.", "4.75%"),
+        ("notes priced at the low-end of reduced guidance, at a 6.75% initial coupon spread.", "6.75%"),
+        ("the pricing fell to below the low-end of guidance, settling at 5.75%.", "5.75%"),
+        ("the pricing settled at the low-end of guidance, to offer investors a 6.75% coupon.", "6.75%"),
+        ("remained at $45 million in size and priced at the top of elevated guidance, at 16%.", "16%"),
+        ("sources said the pricing was fixed in the bottom-half of guidance at 4.75%.", "4.75%"),
+        ("the coupon was eventually fixed at the top-end of the already revised upwards guidance, at 19%.", "19%"),
+        ("with pricing at the mid-point of 8.75%.", "8.75%"),
+        # (b) verb then at/of
+        ("while their coupon was finalised at 5%, so above the initial range.", "5%"),
+        ("with the coupon fixed at 5.5%.", "5.5%"),
+        ("while the pricing settled with a coupon spread of 10% to be paid to investors.", "10%"),
+        ("eventually priced its $95 million of notes at 2.9%, so above the mid-point.", "2.9%"),
+        ("moved to the top-end of guidance and was finalised at the 8.5% coupon level.", "8.5%"),
+        ("with the pricing at the fixed level of a 14% coupon, the top-end of initial guidance.", "14%"),
+        # (c), (d)
+        ("with the coupon now suggested at a fixed 7.75%.", "7.75%"),
+        ("eventually priced to pay investors a 6.9% coupon, so above the initial guidance.", "6.9%"),
+        ("the pricing eventually settled down some 16% from the initial midpoint of spread "
+         "guidance, to offer a 6% coupon.", "6%"),
+        ("The pricing was finalised at a raised level though, to provide a 5.1% coupon to investors.", "5.1%"),
+        # (e)
+        ("with pricing at the 4.4% risk margin, so the low end of the raised guidance range.", "4.4%"),
+        ("and we\u2019re told the initial risk interest spread to be paid to investors is 7%.", "7%"),
+        ("Class 11 \u2013 $35 million; coupon 12.5%.", "12.5%"),
+        # (f) zero-coupon equivalents
+        ("the pricing has now been fixed at the high-end of guidance at 88% of par, so a "
+         "roughly 12% coupon equivalent.", "12%"),
+        ("fixed at the upper-end of guidance, with a coupon equivalent price of 26%, or 74% of par.", "26%"),
+        ("and priced at 91.75%, so an 8.25% equivalent spread and at the bottom of the range.", "8.25%"),
+        # Guards. A per-class pricing list is not one tranche's spread.
+        ("The pricing was eventually finalised at 11.25% for the A-1 notes, 4.5% for the B-1 "
+         "notes and 4.25% for the C-1 notes.", None),
+        # The change in price after the spread is not read; the spread is.
+        ("was fixed at the low-end of reduced guidance, at 2.25%, which represents a 25% drop "
+         "in price from the initial mid-point.", "2.25%"),
+        # Expectation language is not a settlement.
+        ("and we\u2019re told pricing looks set to settle at 8.25%, so just above the mid-point.", None),
+        ("we\u2019re now told the pricing looks likely to end up at the top-end, of 4.5%.", None),
+        # A range endpoint, a change, a price of par: still rejected.
+        ("The Class A notes are being offered with a coupon price guidance range of 10% to 10.75%.", None),
+        ("At final pricing the cat bond upsized by 20% to reach $300m in size.", None),
+        ("pricing guidance offered at 85% to 86% of par value, and we\u2019re told eventually "
+         "priced at 86.25%, so effectively below the initial range.", None),
+        ("with pricing of both tranches settling at the revised 4.25% for the $235 million "
+         "Class A tranche and 6.5% for the $70 million Class B tranche of notes.", None),
+        # "pricing of 6.7%" is a change when "from the mid-point" follows.
+        ("an increase in pricing of 6.7% from the mid-point of the original range.", None),
+        # Expectation before the verb, with a band after it.
+        ("pricing looks set to settle at the top-end of guidance, at 5%.", None),
+        # A probability or loss between the verb and the number is a
+        # different field ("expected loss" is also caught as expectation).
+        ("The notes priced with a probability of attachment of 2%.", None),
+        ("The notes priced at $50 million, with an expected loss of 2%.", None),
+    ]:
+        got = sp(text)
+        check(got == want, f"UNIT spread recall {text[:40]!r}", f"want={want!r} got={got!r}")
+    # A predecessor's settled coupon is still a foreign reference.
+    got = sp("The Series 2020-1 notes, which have an expected loss of 0.33%, priced recently "
+             "with a 3% coupon, which was the mid-point of guidance.", 2020, frozenset({"2020-2"}))
+    check(got is None, "UNIT spread recall: sibling series' coupon excluded", repr(got))
+    for text, want in [
+        ("We\u2019re told that this equates to a 5.9% attachment probability and a 3.65% expected loss.", "5.9%"),
+        ("will have an initial annual modelled attachment probability and expected loss of 0.888%.", "0.888%"),
+        # Never the tail of a range, nor the tail of a number.
+        ("guidance of 5% to 5.9% attachment probability", None),
+    ]:
+        got = ap(text)
+        check(got == want, f"UNIT AP recall {text[:40]!r}", f"want={want!r} got={got!r}")
+
+
 def unit_class_repayment():
     """Class-level repayment for multi-term deals (2026-11-17): the class
     loader, the split rule and its guards, the scaling with write-downs, and
@@ -1909,6 +2051,7 @@ def main():
     unit_parse_losses()
     unit_class_repayment()
     unit_loss_timing()
+    unit_spread_recall()
     n_unit = len(results)
     if golden:
         unit_registry_rules()       # parses pages; reads data/queue.csv
@@ -2202,10 +2345,13 @@ def main():
     # branch, after the page loop, so they ran only when the count was already
     # wrong, and then only over the last page. Four Merna pages added 58 golden
     # checks when the separate-series-total rule was pinned (2026-10-21).
+    # Settled-spread recall round (2026-11-18): 41 unit checks; ten golden
+    # pages and 368 new spread values (each spread value adds per-tranche
+    # guard checks) took the golden count 1965 -> 2192.
     # The tiers are pinned separately so unit checks can be added without
     # touching the golden pin, which has only ever been measured over raw/.
-    EXPECTED_UNIT_CHECKS = 378
-    EXPECTED_GOLDEN_CHECKS = 1965
+    EXPECTED_UNIT_CHECKS = 419
+    EXPECTED_GOLDEN_CHECKS = 2192
     n_golden = len(results) - n_unit
     if n_unit != EXPECTED_UNIT_CHECKS:
         results.append((False, "GUARD unit-check-count",
