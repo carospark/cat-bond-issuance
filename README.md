@@ -113,6 +113,7 @@ src/build_queue.py       crawl order: family-grouped, chronological
 src/build_tables.py      flat deal and tranche projections
 src/build_review_bundle.py  the full deals.csv and tranches.csv (build_tables drops columns)
 src/roll_forward.py      outstanding principal per deal, monthly: issue, loss, repayment
+src/compare_loss_timing.py  the roll-forward under loss-month vs settlement-month timing, deal by deal
 src/net_supply.py        issuance, outstanding and net supply against the publisher's charts
 src/random_sample.py     fixed-seed accuracy benchmark
 tests/test_golden.py     the assertion suite

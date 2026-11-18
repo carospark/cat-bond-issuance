@@ -2039,6 +2039,73 @@ def golden_available():
     return True
 
 
+def unit_compare_loss_timing():
+    """compare_loss_timing (2026-11-18): the by-deal, by-year and ranking
+    tables that trace the loss-versus-settlement gap to deals."""
+    import pandas as pd
+    import compare_loss_timing as clt
+
+    def deals(rows):
+        cols = ["deal_slug", "index_issuer_name", "size", "date_of_issue", "maturity_date",
+                "maturity_date_derived", "maturity_scheduled", "deal_is_private", "deal_status"]
+        return pd.DataFrame([dict(zip(cols, r)) for r in rows], columns=cols, dtype=str).fillna("")
+
+    def losses(rows):
+        cols = ["cat_bond", "deal_slug", "orig_size", "loss_amount", "date_of_loss",
+                "loss_status", "loss_amount_derived", "is_settled", "time_to_resolution", "link_method"]
+        return pd.DataFrame([dict(zip(cols, r)) for r in rows], columns=cols, dtype=str).fillna("")
+
+    d = deals([("a", "A Re Ltd.", "$100m", "Jun 2020", "June 2023", "", "June 2023", "", "issued"),
+               ("b", "B Re Ltd.", "$50m", "Jan 2021", "January 2024", "", "January 2024", "", "issued"),
+               ("c", "C Re Ltd.", "$80m", "Jan 2021", "January 2024", "", "January 2024", "", "issued"),
+               ("e", "E Re Ltd.", "$60m", "Jan 2019", "January 2022", "", "January 2022", "", "issued")])
+    L = losses([("A Re Ltd. (Series 1) Class A", "a", "$100m", "$40m", "Sep 2021", "stated_amount", "40000000.0", "True", "Approx. 18 months", "name"),
+                ("B Re Ltd. Class B", "b", "$50m", "$10m", "Mar 2022", "stated_amount", "10000000.0", "True", "Ongoing", "name"),
+                ("C Re Ltd. Class A", "c", "$80m", "$80m", "Dec 2021", "stated_amount", "80000000.0", "True", "Paid out in 2023", "name"),
+                ("C Re Ltd. Class B", "c", "$80m", "", "Dec 2021", "extended", "", "False", "", "name"),
+                ("E Re Ltd. Class A", "e", "$60m", "$5m", "Sep 2021", "stated_amount", "5000000.0", "True", "Approx. 18 months", "name")])
+    theirs = pd.DataFrame({"year": [2021, 2022, 2023], "artemis_outstanding": [200.0, 200.0, 50.0]})
+    by_deal, by_year, top = clt.compare_frames(d, L, "2024-08", theirs)
+
+    check(len(by_deal) == 4 and set(by_deal.deal_slug) == {"a", "b", "c", "e"},
+          "UNIT compare_loss_timing: one row per settled amount-bearing loss row", repr(by_deal.deal_slug.tolist()))
+    a = by_deal[by_deal.deal_slug == "a"].iloc[0]
+    check((a["class"], a.loss_month, a.settlement_month, a.months_apart, a.settlement_basis) == ("A", "2021-09", "2023-03", 18, "loss_timing=settlement:+18m"),
+          "UNIT compare_loss_timing: settlement month and months apart", repr(a.to_dict()))
+    check(a.deal_year_end_diff_m == "2021:+40.0;2022:+40.0" and abs(a.deal_cum_abs_diff_m - 80.0) < 1e-9
+          and a.deal_diff_mechanism == "write_down_moved",
+          "UNIT compare_loss_timing: the deal's year-end differences", repr(a.deal_year_end_diff_m))
+    e = by_deal[by_deal.deal_slug == "e"].iloc[0]
+    check(e.deal_year_end_diff_m == "2021:+5.0;2022:+60.0" and e.deal_diff_mechanism == "remainder_held_to_settlement"
+          and abs(e.deal_settled_loss_usd_m - 5.0) < 1e-9,
+          "UNIT compare_loss_timing: a remainder held past maturity to the settlement month is named as such", repr(e.to_dict()))
+    b = by_deal[by_deal.deal_slug == "b"].iloc[0]
+    check(b.settlement_month == "" and b.settlement_basis == "loss_settlement_unknown" and b.months_apart == "" and b.deal_year_end_diff_m == "",
+          "UNIT compare_loss_timing: no settlement statement leaves the row at the loss month", repr(b.to_dict()))
+    c = by_deal[by_deal.deal_slug == "c"].iloc[0]
+    check(c.settlement_month == "2023-12" and c.settlement_basis == "loss_timing=settlement:year" and c.months_apart == 24,
+          "UNIT compare_loss_timing: a 'paid out in YYYY' row settles at that December", repr(c.to_dict()))
+    check(by_deal.deal_slug.tolist()[0] == "c", "UNIT compare_loss_timing: rows sorted by the deal's cumulative difference", repr(by_deal.deal_slug.tolist()))
+
+    y = by_year.set_index("year")
+    check(abs(y.loc[2021, "settlement_minus_loss"] - 125.0) < 1e-9 and abs(y.loc[2022, "settlement_minus_loss"] - 180.0) < 1e-9
+          and abs(y.loc[2023, "settlement_minus_loss"]) < 1e-9,
+          "UNIT compare_loss_timing: yearly difference is the sum of the deals' differences", repr(y.settlement_minus_loss.to_dict()))
+    check(y.loc[2021, "top_deals"] == "c:+80.0(64%);a:+40.0(32%);e:+5.0(4%)" and int(y.loc[2021, "deals_differing"]) == 3,
+          "UNIT compare_loss_timing: top deals with their share of the year's difference", repr(y.loc[2021, "top_deals"]))
+    check(abs(y.loc[2021, "gap_loss"] - (165.0 - 200.0)) < 1e-9 and abs(y.loc[2021, "gap_settlement"] - (290.0 - 200.0)) < 1e-9,
+          "UNIT compare_loss_timing: gaps to the publisher under both settings", repr(y[["gap_loss", "gap_settlement"]].to_dict()))
+    check(top.deal_slug.tolist() == ["c", "a", "e"] and top.years.tolist() == ["2021-2022"] * 3 and abs(top.cum_abs_diff_m.iloc[0] - 160.0) < 1e-9
+          and top.mechanism.tolist() == ["write_down_moved", "write_down_moved", "remainder_held_to_settlement"],
+          "UNIT compare_loss_timing: ranking by cumulative difference", repr(top.to_dict(orient="records")))
+    by_year_plain = clt.by_year(rf.monthly_flows(rf.deal_book(d, L, "2024-08")), rf.monthly_flows(rf.deal_book(d, L, "2024-08", loss_timing="settlement")),
+                                clt.deal_year_end_diffs(rf.deal_book(d, L, "2024-08"), rf.deal_book(d, L, "2024-08", loss_timing="settlement"), "2024-08"),
+                                as_of="2024-08")
+    n_years = len(rf.outstanding_by_year(rf.monthly_flows(rf.deal_book(d, L, "2024-08")), "2024-08"))
+    check("gap_loss" not in by_year_plain.columns and len(by_year_plain) == n_years,
+          "UNIT compare_loss_timing: without the publisher series the gap columns are absent", repr((by_year_plain.columns.tolist(), len(by_year_plain), n_years)))
+
+
 def main():
     golden = golden_available()
     unit_percent_parsing()
@@ -2051,6 +2118,7 @@ def main():
     unit_parse_losses()
     unit_class_repayment()
     unit_loss_timing()
+    unit_compare_loss_timing()
     unit_spread_recall()
     n_unit = len(results)
     if golden:
@@ -2350,7 +2418,7 @@ def main():
     # guard checks) took the golden count 1965 -> 2192.
     # The tiers are pinned separately so unit checks can be added without
     # touching the golden pin, which has only ever been measured over raw/.
-    EXPECTED_UNIT_CHECKS = 419
+    EXPECTED_UNIT_CHECKS = 431
     EXPECTED_GOLDEN_CHECKS = 2192
     n_golden = len(results) - n_unit
     if n_unit != EXPECTED_UNIT_CHECKS:

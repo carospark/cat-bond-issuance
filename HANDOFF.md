@@ -3,6 +3,78 @@
 Read `PARSER_BACKLOG.md` first. It is the current state: what is parsed, what
 is validated, and everything still worth fixing, ordered by value per hour.
 
+## Checkpoint (2026-11-18, later): loss timing by deal
+
+`src/compare_loss_timing.py` runs the roll-forward under `--loss-timing
+loss` and `--loss-timing settlement` and traces the yearly difference to
+deals. Tests 2611 -> **2623** (419 -> 431 unit; golden pin 2192, no page
+added). Outputs under `data/validation_dashboards/` (tracked, like the
+other dashboards): `loss_timing_by_deal.csv`, one row per settled, linked,
+amount-bearing loss row (83) with the loss month the default uses, the
+settlement month the alternative reads (36 rows state one: 8 dated, 4
+"paid out in YYYY", 24 as a resolution duration; 46 say nothing, 1 is
+undated), months apart, and the deal's year-end stock difference for every
+December it touches, each deal's ledger rebuilt alone under both settings
+so the differences are exact; `loss_timing_by_year.csv`, closing stock and
+gap to the publisher under both settings with the deals accounting for the
+largest share of each year's difference. The yearly table reproduces the
+night checkpoint's columns (2010 -455 / +140 ... 2026 +3,916 / +3,916).
+
+What "recognition date" means in the default run. The write-down leaves the
+stock at the loss row's `date_of_loss` month, which is the event month as
+the page's loss table states it ("Sep 2022"), not the month the page first
+documented a write-down; a year-only cell ("2017 / 18") goes to that year's
+December and the deal is flagged `loss_month_imputed`. When an event and
+the first documented write-down are months apart, the default still uses
+the event month, because the page gives the write-down date only as a
+resolution duration or an undated amount and the event month is the one
+date every loss row carries; the `settlement` run is where the paid date
+goes, and where the row states none the loss month stands there too
+(`loss_settlement_unknown`). So the default's stock is "principal
+economically lost as of the event", and the settlement run's is "principal
+not yet paid out".
+
+The deals, and the mechanism. 32 deals' ledgers differ. For 20 the only
+difference is the written-down amount staying until settlement
+(`deal_diff_mechanism=write_down_moved`: Citrus Re 2016-1 $217m held
+2017-2019, Akibare Re 2016-1 and Cal Phoenix Re 2018-1 $200m each held
+2018-2019). For 12 the difference EXCEEDS the deal's settled loss
+(`remainder_held_to_settlement`): the ledger repays a deal's remainder at
+the later of its maturity and its last settled loss, and under settlement
+timing the last loss is the settlement month, so a deal with a small loss
+settled years after its maturity is held whole until then. Avalon Re (loss
+$12.7m, settled 35 months on) is held at its full $405m through 2010-2012;
+Crystal Credit ($123m loss, 42 months) at $305m through 2011-2014; Kamp Re
+2005 ($145m) at $190m; MultiCat Mexico 2012-1 ($50m) at $315m in 2016;
+Residential Re 2016-1 ($51m, "principal reduced to zero at end of Feb
+2023") at $250m through 2020-2022; Sanders Re II 2020-1 ($78m) at $247m
+through 2024-2025; Gator Re ($35m) at $200m in 2017. The ten largest
+cumulative differences, $m settlement minus loss:
+
+| deal | cumulative | peak | settled loss | mechanism | years |
+|---|---:|---:|---:|---|---|
+| Crystal Credit | 1,220 | 305 | 123 | remainder held | 2011-14 |
+| Avalon Re | 1,215 | 405 | 13 | remainder held | 2010-12 |
+| Residential Re 2016-1 | 902 | 250 | 51 | remainder held | 2017-22 |
+| Citrus Re 2015-1 | 650 | 278 | 125 | remainder held | 2017-19 |
+| Citrus Re 2016-1 | 583 | 217 | 217 | write-down moved | 2017-19 |
+| Kamp Re 2005 | 570 | 190 | 145 | remainder held | 2009-11 |
+| Sanders Re II 2020-1 | 569 | 247 | 78 | remainder held | 2023-25 |
+| Akibare Re 2016-1 | 400 | 200 | 200 | write-down moved | 2018-19 |
+| Cal Phoenix Re 2018-1 | 400 | 200 | 200 | write-down moved | 2018-19 |
+| MultiCat Mexico 2012-1 | 315 | 315 | 50 | remainder held | 2016 |
+
+Reading it for the choice: the 2010-2014 and 2016 differences are almost
+entirely remainders held, not losses moved, and whether a $405m deal with a
+$13m loss stayed outstanding for three years after its maturity is a
+question about the page, not about timing. If the settlement convention is
+adopted, the repay-month rule should probably stop following the
+settlement month for the unlost remainder (or follow it only where the
+page says the notes were extended), which would leave the 20 write-down
+moves as the whole effect. Nothing was changed here; the comparison is
+reproducible with `./.venv/bin/python src/compare_loss_timing.py
+[--no-write]`.
+
 ## Checkpoint (2026-11-18): attachment probability and spread recall
 
 A recall round on the two tranche-level fields the atlas's layer view needs
